@@ -60,7 +60,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Week 3 KINGO VOICE TA Listener", lifespan=lifespan)
 
 COURSE_NAME = "시계열데이터처리개론"
-VALID_MODES = {"explain", "socratic", "solution"}
+VALID_MODES = {"explain", "socratic"}
 
 
 class TrustedSite(BaseModel):

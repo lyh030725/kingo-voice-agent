@@ -47,10 +47,9 @@ button { cursor: pointer; }
   background: #063f6d;
 }
 .brand-logo {
-  width: 56px;
-  height: 56px;
+  width: 60px;
+  height: 60px;
   object-fit: contain;
-  filter: brightness(0) invert(1);
 }
 .global-item {
   min-height: 61px;
@@ -121,7 +120,11 @@ button { cursor: pointer; }
   padding: 7px 9px;
   text-align: left;
   font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
+.course-menu svg { width: 16px; height: 16px; flex: 0 0 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .course-menu button:hover { background: #e7edf3; color: var(--skku); }
 .course-menu button.active {
   color: var(--skku);
@@ -208,7 +211,7 @@ button { cursor: pointer; }
 }
 .site-form input:focus, .chat-form input:focus { outline: 2px solid #a9ccea; border-color: var(--skku); }
 .site-list li code { color: #3d5369; font: 13px ui-monospace, monospace; }
-.mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
+.mode-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 18px; }
 .mode {
   border: 1px solid #b9c5d0;
   border-radius: 5px;
@@ -281,7 +284,6 @@ button { cursor: pointer; }
 <nav class="global-nav" aria-label="i-Campus 전역 메뉴">
   <div class="brand-mark"><img class="brand-logo" src="skku-symbol.png" alt="성균관대학교"></div>
   <button class="global-item" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 4-7 8-7s7 2 8 7"/></svg><span>계정</span></button>
-  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3 8-8 10-5-2-8-5-8-10V6z"/><path d="M9 12l2 2 4-5"/></svg><span>관리자</span></button>
   <button class="global-item" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M6 15a7 7 0 0112 0M12 12l4-4"/></svg><span>대시보드</span></button>
   <button class="global-item active" type="button"><svg viewBox="0 0 24 24"><path d="M5 3h13a2 2 0 012 2v16H7a3 3 0 01-3-3V4a1 1 0 011-1z"/><path d="M7 3v14h13"/></svg><span>과목</span></button>
   <button class="global-item" type="button"><svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M2 20c0-4 2-7 6-7s6 3 6 7M12 14c1-.7 2-1 4-1 4 0 6 3 6 7"/></svg><span>그룹</span></button>
@@ -308,17 +310,17 @@ button { cursor: pointer; }
     <aside class="course-nav">
       <div class="course-code">2026년 2학기</div>
       <nav class="course-menu" aria-label="과목 메뉴">
-        <button type="button">⌂ &nbsp;홈</button>
-        <button type="button">▤ &nbsp;수업 계획서</button>
-        <button type="button">♧ &nbsp;공지</button>
-        <button type="button">▧ &nbsp;게시판</button>
-        <button type="button">▱ &nbsp;강의콘텐츠</button>
-        <button type="button">· &nbsp;과제 및 평가</button>
-        <button type="button">· &nbsp;시험 및 설문</button>
-        <button type="button">♙ &nbsp;출결현황</button>
-        <button type="button">▣ &nbsp;학습 활동 현황</button>
-        <button type="button">▧ &nbsp;성적</button>
-        <button class="active" type="button">♧ &nbsp;KINGO VOICE TA</button>
+        <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .7-1.5l7-6a2 2 0 0 1 2.6 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>홈</button>
+        <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2M12 11h4M12 16h4M8 11h.01M8 16h.01"/></svg>수업 계획서</button>
+        <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14M8 6v8"/></svg>공지</button>
+        <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 10a2 2 0 0 1-2 2H7l-4 3V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2zM20 9a2 2 0 0 1 2 2v10l-4-3h-8a2 2 0 0 1-2-2v-1"/></svg>게시판</button>
+        <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v16M22 6V5a2 2 0 0 0-2-2h-4a5 5 0 0 0-4 2 5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4a5 5 0 0 1 4 2 5 5 0 0 1 4-2h4a2 2 0 0 0 2-2v-1M16 12l2 2 4-4"/></svg>강의콘텐츠</button>
+        <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 5h8M13 12h8M13 19h8M3 17l2 2 4-4M3 7l2 2 4-4"/></svg>과제 및 평가</button>
+        <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9 9a3 3 0 0 1 6 1c0 2-3 3-3 3M12 17h.01"/></svg>시험 및 설문</button>
+        <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4M16 2v4M21 14V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8M3 10h18M16 20l2 2 4-4"/></svg>출결현황</button>
+        <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21v-6M12 21V9M19 21V3"/></svg>학습 활동 현황</button>
+        <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 10l-9-5-9 5 9 5zM6 12.5V16c0 2 3 3 6 3s6-1 6-3v-3.5M22 10v6"/></svg>성적</button>
+        <button class="active" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>KINGO VOICE TA</button>
       </nav>
     </aside>
 
@@ -335,7 +337,6 @@ button { cursor: pointer; }
         <div class="mode-grid" role="radiogroup" aria-label="챗봇 답변 모드">
           <button class="mode" data-mode="explain" type="button" role="radio" aria-checked="false"><strong>설명 모드</strong><small>개념과 예시를 직접 설명하고 이해를 확인합니다.</small></button>
           <button class="mode active" data-mode="socratic" type="button" role="radio" aria-checked="true"><strong>소크라테스 모드</strong><small>질문과 단계별 힌트로 스스로 답을 찾게 합니다.</small></button>
-          <button class="mode" data-mode="solution" type="button" role="radio" aria-checked="false"><strong>해설 모드</strong><small>문제의 가정과 풀이 과정을 순서대로 해설합니다.</small></button>
         </div>
 
         <div class="chat-layout">
@@ -344,7 +345,7 @@ button { cursor: pointer; }
             <div class="chat-toolbar"><span id="current-mode-label">소크라테스 모드</span><button id="new-chat" class="secondary" type="button">새 대화</button></div>
             <div id="messages" class="messages" aria-live="polite"></div>
             <form id="chat-form" class="chat-form">
-              <input id="chat-input" maxlength="4000" autocomplete="off" placeholder="예: 정상성과 차분의 관계를 설명해줘" aria-label="AI 조교에게 질문">
+              <input id="chat-input" maxlength="4000" autocomplete="off" placeholder="강의자료를 불러오는 중..." aria-label="AI 조교에게 질문">
               <button class="primary" type="submit">전송</button>
             </form>
           </section>
@@ -428,7 +429,7 @@ function setRole(role) {
 byId("student-toggle").addEventListener("click", () => setRole("student"));
 byId("teacher-toggle").addEventListener("click", () => setRole("teacher"));
 
-const modeLabels = { explain: "설명 모드", socratic: "소크라테스 모드", solution: "해설 모드" };
+const modeLabels = { explain: "설명 모드", socratic: "소크라테스 모드" };
 document.querySelectorAll(".mode").forEach((button) => {
   button.addEventListener("click", () => {
     learningMode = button.dataset.mode;
@@ -517,6 +518,25 @@ byId("new-chat").addEventListener("click", async () => {
   resetMessages();
 });
 
+function setChatPlaceholder(materials) {
+  const topics = materials.slice(0, 2).map((material) =>
+    material.name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ")
+  );
+  byId("chat-input").placeholder = topics.length
+    ? "예: " + topics.join(", ") + " 자료의 핵심 개념을 설명해줘"
+    : "예: 강의자료에서 정상성과 차분의 관계를 찾아 설명해줘";
+}
+
+async function loadChatPlaceholder() {
+  try {
+    const response = await fetch("/api/materials");
+    if (response.ok) setChatPlaceholder((await response.json()).materials);
+  } catch (_) {
+    byId("chat-input").placeholder = "강의자료 기반으로 질문해 주세요";
+  }
+}
+loadChatPlaceholder();
+
 async function loadTeacherData() {
   const [materialsResponse, sitesResponse] = await Promise.all([
     fetch("/api/materials"),
@@ -533,6 +553,7 @@ function formatBytes(size) {
 }
 
 function renderMaterials(materials) {
+  setChatPlaceholder(materials);
   const list = byId("material-list");
   list.replaceChildren();
   if (!materials.length) {

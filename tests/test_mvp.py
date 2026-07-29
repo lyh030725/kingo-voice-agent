@@ -45,11 +45,12 @@ class MvpTests(unittest.TestCase):
         mocked = AsyncMock(return_value=("풀이", ["search_course_materials"]))
         with patch.object(server, "think", mocked):
             result = asyncio.run(
-                server.answer_text(brain.TextQuestion(text="ARIMA를 풀어줘", mode="solution"))
+                server.answer_text(brain.TextQuestion(text="ARIMA를 풀어줘", mode="explain"))
             )
 
         self.assertEqual(result["reply"], "풀이")
-        self.assertEqual(mocked.await_args.args[2], "solution")
+        self.assertEqual(mocked.await_args.args[2], "explain")
+        self.assertEqual(server.VALID_MODES, {"explain", "socratic"})
 
 
 if __name__ == "__main__":

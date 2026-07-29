@@ -212,7 +212,7 @@ class StageTimer:
 
 class TextQuestion(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
-    mode: Literal["explain", "socratic", "solution"] = "socratic"
+    mode: Literal["explain", "socratic"] = "socratic"
 
 
 class WeakConceptCapture(BaseModel):
@@ -255,10 +255,6 @@ MODE_PROMPTS = {
     "socratic": (
         "Socratic mode: do not reveal the final answer first. Ask one focused "
         "question or give one progressive hint that makes the student reason."
-    ),
-    "solution": (
-        "Solution mode: provide a step-by-step worked explanation grounded in "
-        "the evidence, naming assumptions and the reason for each step."
     ),
 }
 
@@ -715,7 +711,7 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
     Args:
         transcript: Student utterance transcribed to text.
         timer: Collector for tool and model latency.
-        mode: Learner-selected explanation, Socratic, or worked-solution mode.
+        mode: Learner-selected explanation or Socratic mode.
 
     Returns:
         Tuple containing reply text and names of tools used.

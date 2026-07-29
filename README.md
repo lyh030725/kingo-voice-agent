@@ -3,6 +3,7 @@
 성균관대학교 **시계열데이터처리개론**을 위한 i-Campus형 AI 음성 조교 MVP입니다. 교수자가 제공한 강의자료를 우선 근거로 사용하고, 근거가 부족할 때만 허용된 사이트를 검색합니다.
 
 > 성균관대학교 공식 서비스가 아닌 교육용 MVP입니다. UI와 심볼은 성균관대학교 i-Campus 및 [공식 UI 안내](https://www.skku.edu/skku/about/symbol/symbol_01.do)를 참고했습니다.
+> 과목 메뉴 아이콘은 [Lucide](https://lucide.dev/)를 사용하며 라이선스는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 포함했습니다.
 
 ## 주요 기능
 
@@ -10,7 +11,7 @@
 - 교수자 PDF 강의자료 업로드
 - 교수자 신뢰 사이트 추가·삭제
 - 학습자 텍스트 채팅과 핸즈프리 음성 대화
-- 설명·소크라테스·해설 답변 모드
+- 설명·소크라테스 답변 모드
 - 강의자료 PDF RAG와 파일명·페이지 출처
 - Moss 기반 취약 개념 저장·회상·간격 복습
 - 5개 function tool 공통 dispatcher
