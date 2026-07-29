@@ -42,13 +42,14 @@ class MvpTests(unittest.TestCase):
                 brain.add_trusted_domain("not-a-domain")
 
     def test_text_chat_forwards_selected_mode(self) -> None:
-        mocked = AsyncMock(return_value=("풀이", ["search_course_materials"]))
+        mocked = AsyncMock(return_value=("풀이", ["search_course_materials"], ["https://example.com/lesson"]))
         with patch.object(server, "think", mocked):
             result = asyncio.run(
                 server.answer_text(brain.TextQuestion(text="ARIMA를 풀어줘", mode="explain"))
             )
 
         self.assertEqual(result["reply"], "풀이")
+        self.assertEqual(result["sources"], ["https://example.com/lesson"])
         self.assertEqual(mocked.await_args.args[2], "explain")
         self.assertEqual(server.VALID_MODES, {"explain", "socratic"})
 

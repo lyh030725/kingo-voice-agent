@@ -58,7 +58,7 @@ class FakeClient:
                 }),
             ]),
             SimpleNamespace(
-                content=json.dumps({"answer": "근거를 바탕으로 설명할게요."}, ensure_ascii=False),
+                content=json.dumps({"answer": "근거를 바탕으로 설명할게요. https://arxiv.org/abs/1706.03762"}, ensure_ascii=False),
                 tool_calls=[],
             ),
         ])
@@ -114,7 +114,7 @@ class BrainToolTests(unittest.TestCase):
                 new=AsyncMock(return_value=json.dumps({"status": "practicing"})),
             ) as review,
         ):
-            reply, tools = asyncio.run(
+            reply, tools, sources = asyncio.run(
                 brain.think("Query와 Key를 왜 곱해?", brain.StageTimer())
             )
 
@@ -151,7 +151,8 @@ class BrainToolTests(unittest.TestCase):
         )
         save.assert_awaited_once()
         review.assert_awaited_once_with(memory_id="M-test", correct=True)
-        self.assertIn("https://arxiv.org/abs/1706.03762", reply)
+        self.assertNotIn("https://arxiv.org/abs/1706.03762", reply)
+        self.assertEqual(sources, ["https://arxiv.org/abs/1706.03762"])
 
     def test_tool_docstrings_describe_contracts(self) -> None:
         for target in (

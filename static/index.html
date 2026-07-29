@@ -240,6 +240,10 @@ button { cursor: pointer; }
 .message.user .bubble { background: #eaf3fa; border-color: #c9dce9; border-radius: 12px 4px 12px 12px; }
 .tool-row { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
 .tool-chip { border-radius: 10px; background: #eaf5e5; color: #4d7535; padding: 2px 7px; font-size: 10px; }
+.source-list { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e4e9ee; display: grid; gap: 5px; }
+.source-title { color: #6b7989; font-size: 11px; font-weight: 700; }
+.source-link { display: block; max-width: 100%; color: #1768a5; font-size: 12px; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-link:hover { text-decoration: underline; }
 .timing { margin-top: 5px; color: #8491a0; font-size: 10px; }
 .chat-form { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--line); background: white; }
 .chat-form input { padding: 11px 12px; }
@@ -445,7 +449,7 @@ document.querySelectorAll(".mode").forEach((button) => {
   });
 });
 
-function addMessage(role, text, tools, timings) {
+function addMessage(role, text, tools, timings, sources) {
   const row = document.createElement("div");
   row.className = "message " + role;
   const avatar = document.createElement("div");
@@ -470,6 +474,31 @@ function addMessage(role, text, tools, timings) {
       toolRow.appendChild(chip);
     });
     wrap.appendChild(toolRow);
+  }
+  if (Array.isArray(sources) && sources.length) {
+    const sourceList = document.createElement("div");
+    sourceList.className = "source-list";
+    const title = document.createElement("div");
+    title.className = "source-title";
+    title.textContent = "참고 출처";
+    sourceList.appendChild(title);
+    let validSources = 0;
+    sources.forEach((url, index) => {
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return;
+        const link = document.createElement("a");
+        link.className = "source-link";
+        link.href = parsed.href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = (index + 1) + ". " + parsed.hostname.replace(/^www\./, "") + (parsed.pathname === "/" ? "" : parsed.pathname);
+        link.title = parsed.href;
+        sourceList.appendChild(link);
+        validSources += 1;
+      } catch (_) {}
+    });
+    if (validSources) wrap.appendChild(sourceList);
   }
   if (timings && timings.total !== undefined) {
     const timing = document.createElement("div");
@@ -504,7 +533,7 @@ byId("chat-form").addEventListener("submit", async (event) => {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || "답변을 생성하지 못했습니다.");
-    addMessage("assistant", data.reply, data.tools, data.timings);
+    addMessage("assistant", data.reply, data.tools, data.timings, data.sources);
   } catch (error) {
     addMessage("assistant", "오류: " + error.message);
   } finally {
@@ -739,9 +768,10 @@ function handleSocket(message) {
     if (pendingVoice) {
       pendingVoice.reply = message.reply;
       pendingVoice.tools = message.tools;
+      pendingVoice.sources = message.sources;
       pendingVoice.timings = message.timings;
       addMessage("user", pendingVoice.transcript || "(음성 질문)");
-      addMessage("assistant", pendingVoice.reply, pendingVoice.tools, pendingVoice.timings);
+      addMessage("assistant", pendingVoice.reply, pendingVoice.tools, pendingVoice.timings, pendingVoice.sources);
       pendingVoice = null;
     }
     finishPlayback();

@@ -46,7 +46,7 @@ uv run uvicorn server:app --port 8000
 
 | Method | Path | 설명 |
 |---|---|---|
-| `POST` | `/answer-text` | 텍스트 질문과 답변 모드 전달 |
+| `POST` | `/answer-text` | 텍스트 질문과 답변 모드 전달; reply·tools·sources 반환 |
 | `WS` | `/stream` | 16kHz PCM 음성·모드 송수신 |
 | `GET/POST` | `/api/materials` | 강의자료 조회·PDF 업로드 |
 | `GET/POST/DELETE` | `/api/trusted-sites` | 신뢰 도메인 조회·추가·삭제 |

@@ -238,7 +238,7 @@ SYSTEM_PROMPT = (
     "At the start of every student turn, call recall_weak_concepts and "
     "search_course_materials together. Base factual claims only on tool results. "
     "For PDF evidence, state filename and page. If PDF evidence is missing or "
-    "insufficient, call search_trusted_web and cite at least one returned URL. "
+    "insufficient, call search_trusted_web. Return source URLs through the separate sources field; do not repeat raw URLs in the conversational answer. "
     "Use recalled weaknesses to personalize hints and check prerequisites. "
     "Call save_weak_concept only for explicit confusion, an incorrect answer, "
     "or an incomplete explanation; ordinary questions are not weaknesses. "
@@ -572,7 +572,7 @@ def search_trusted_web(
                 "role": "system",
                 "content": (
                     "Answer in Korean using only the web-search evidence. "
-                    "Include inline source URLs. If evidence is insufficient, say so."
+                    "Keep source URLs in the tool result, not in the prose answer. If evidence is insufficient, say so."
                 ),
             },
             {"role": "user", "content": query},
@@ -610,7 +610,7 @@ def search_trusted_web(
             "found": True,
             "answer": answer,
             "sources": sources,
-            "instruction": "The final answer must include at least one source URL.",
+            "instruction": "The UI displays source URLs separately; do not repeat them in the answer.",
         }
     )
 
@@ -705,7 +705,7 @@ def _append_history(message: dict) -> None:
 
 
 
-async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> tuple[str, list[str]]:
+async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> tuple[str, list[str], list[str]]:
     """Generate one grounded Socratic response through function tools.
 
     Args:
@@ -714,7 +714,7 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
         mode: Learner-selected explanation or Socratic mode.
 
     Returns:
-        Tuple containing reply text and names of tools used.
+        Tuple containing clean reply text, tool names, and trusted source URLs.
     """
     _append_history({"role": "user", "content": transcript})
     client = xai_client()
@@ -786,8 +786,8 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
         if not msg.tool_calls:
             decision = AgentDecision.model_validate_json(msg.content or "")
             reply_text = decision.answer.strip() or "답변을 생성하지 못했어요. 다시 질문해 주세요."
-            if external_sources and not any(url in reply_text for url in external_sources):
-                reply_text += " 외부 출처: " + ", ".join(external_sources[:3])
+            if external_sources:
+                reply_text = _for_speech(reply_text)
 
             if _explicit_confusion(transcript) and "save_weak_concept" not in tools_used:
                 memory = _fallback_weak_concept(transcript)
@@ -795,7 +795,7 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
                 tools_used.append("save_weak_concept")
 
             _append_history({"role": "assistant", "content": reply_text})
-            return reply_text, tools_used
+            return reply_text, tools_used, external_sources[:3]
 
         tool_messages.append({
             "role": "assistant",

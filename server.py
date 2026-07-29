@@ -259,7 +259,7 @@ async def respond(ws: WebSocket, utterance: bytes, mode: str = "socratic") -> bo
         log.info("heard: %r", transcript)
         await ws.send_json({"type": "transcript", "text": transcript})
 
-        reply, tools_used = await think(transcript, StageTimer(), mode)
+        reply, tools_used, sources = await think(transcript, StageTimer(), mode)
         timings["llm"] = ms() - timings["stt"]
         log.info("reply: %r (tools: %s)", reply, tools_used or "none")
 
@@ -283,6 +283,7 @@ async def respond(ws: WebSocket, utterance: bytes, mode: str = "socratic") -> bo
             "type": "audio_end",
             "reply": reply,
             "tools": tools_used,
+            "sources": sources,
             "timings": timings,
         })
         return True
@@ -359,7 +360,7 @@ async def answer_text(question: TextQuestion) -> dict:
         question: Validated text question.
 
     Returns:
-        Reply, tools used, transcript, and timings.
+        Reply, tools, trusted sources, transcript, and timings.
     """
     transcript = question.text.strip()
     if not transcript:
@@ -367,11 +368,11 @@ async def answer_text(question: TextQuestion) -> dict:
     timer = StageTimer()
     try:
         with timer.stage("total"):
-            reply, tools_used = await think(transcript, timer, question.mode)
+            reply, tools_used, sources = await think(transcript, timer, question.mode)
     except Exception as exc:
         log.exception("text answer failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return {"transcript": transcript, "reply": reply, "tools": tools_used, "timings": timer.timings_ms}
+    return {"transcript": transcript, "reply": reply, "tools": tools_used, "sources": sources, "timings": timer.timings_ms}
 
 
 @app.post("/reset")
