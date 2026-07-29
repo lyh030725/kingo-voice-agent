@@ -1,0 +1,828 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>시계열데이터처리개론 | i-Campus</title>
+<style>
+:root {
+  --skku: #0b4f8a;
+  --skku-dark: #102d4d;
+  --skku-deep: #09233d;
+  --accent: #1f70b7;
+  --green: #5d8d3d;
+  --ink: #27364a;
+  --muted: #66768a;
+  --line: #d9e0e7;
+  --soft: #f4f6f8;
+  --white: #fff;
+  --danger: #c53c3c;
+  --shadow: 0 1px 3px rgba(17, 45, 76, .12);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #f7f8fa;
+  color: var(--ink);
+  font: 14px/1.5 Arial, "Noto Sans KR", sans-serif;
+}
+button, input { font: inherit; }
+button { cursor: pointer; }
+.global-nav {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 84px;
+  z-index: 20;
+  background: var(--skku-deep);
+  color: white;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.brand-mark {
+  height: 82px;
+  display: grid;
+  place-items: center;
+  background: #071b2e;
+  border-bottom: 1px solid rgba(255,255,255,.13);
+}
+.brand-seal {
+  width: 48px;
+  height: 48px;
+  border: 2px solid #e9c86e;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #e9c86e;
+  font: 700 25px Georgia, serif;
+}
+.global-item {
+  min-height: 70px;
+  padding: 9px 4px;
+  border: 0;
+  border-left: 4px solid transparent;
+  background: transparent;
+  color: #e9f1f7;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  text-align: center;
+  font-size: 11px;
+}
+.global-item svg { width: 23px; height: 23px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+.global-item.active { background: rgba(255,255,255,.12); border-left-color: #e9c86e; color: white; }
+.global-spacer { flex: 1; }
+.app { margin-left: 84px; min-height: 100vh; }
+.topbar {
+  height: 68px;
+  padding: 0 28px;
+  background: white;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.wordmark { display: flex; align-items: baseline; gap: 12px; }
+.wordmark strong { color: var(--skku-dark); font-size: 19px; letter-spacing: -.4px; }
+.wordmark span { color: var(--skku); font-size: 22px; font-weight: 300; border-left: 1px solid var(--line); padding-left: 12px; }
+.top-actions { display: flex; align-items: center; gap: 16px; }
+.user-name { color: #46576a; font-size: 13px; }
+.role-toggle {
+  display: inline-flex;
+  padding: 3px;
+  background: #e9edf2;
+  border-radius: 7px;
+}
+.role-toggle button {
+  min-width: 74px;
+  border: 0;
+  border-radius: 5px;
+  padding: 7px 12px;
+  color: #526276;
+  background: transparent;
+  font-weight: 600;
+}
+.role-toggle button.active { color: white; background: var(--skku); box-shadow: var(--shadow); }
+.course-layout { display: grid; grid-template-columns: 226px minmax(0, 1fr); min-height: calc(100vh - 68px); }
+.course-nav {
+  background: white;
+  border-right: 1px solid var(--line);
+  padding: 27px 0;
+}
+.course-code { color: var(--muted); font-size: 11px; padding: 0 24px 4px; }
+.course-name {
+  padding: 0 24px 20px;
+  color: var(--skku-dark);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.35;
+  border-bottom: 1px solid #edf0f3;
+}
+.course-menu { padding: 12px 0; }
+.course-menu button {
+  width: 100%;
+  border: 0;
+  border-left: 4px solid transparent;
+  background: transparent;
+  color: #435268;
+  padding: 10px 24px 10px 20px;
+  text-align: left;
+}
+.course-menu button:hover { background: #f2f5f8; color: var(--skku); }
+.course-menu button.active {
+  color: var(--skku);
+  border-left-color: var(--skku);
+  background: #eef5fb;
+  font-weight: 700;
+}
+.content { min-width: 0; padding: 24px 34px 48px; }
+.breadcrumb { color: #718094; font-size: 12px; margin-bottom: 14px; }
+.breadcrumb b { color: var(--skku); font-weight: 500; }
+.page-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 18px;
+  margin-bottom: 22px;
+}
+.page-heading h1 { margin: 0; color: #24374d; font-size: 24px; font-weight: 500; }
+.page-heading p { margin: 5px 0 0; color: var(--muted); }
+.term-badge { color: var(--skku); border: 1px solid #a9c6df; background: #f2f8fc; padding: 5px 9px; border-radius: 4px; font-size: 12px; white-space: nowrap; }
+.notice {
+  background: #eef6fc;
+  border: 1px solid #c6ddec;
+  border-left: 4px solid var(--skku);
+  border-radius: 3px;
+  padding: 13px 15px;
+  margin-bottom: 20px;
+  color: #385570;
+}
+.card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+}
+.card-head {
+  min-height: 57px;
+  padding: 15px 19px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.card-head h2 { margin: 0; font-size: 16px; font-weight: 600; color: #2c4057; }
+.card-head small { color: var(--muted); }
+.card-body { padding: 19px; }
+.teacher-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr); gap: 20px; }
+.setting-intro { margin: 0 0 17px; color: var(--muted); }
+.upload-box {
+  border: 1px dashed #9eafbf;
+  background: #f8fafc;
+  border-radius: 4px;
+  padding: 24px;
+  text-align: center;
+}
+.upload-box input { width: min(100%, 360px); color: #4c5d71; }
+.primary, .secondary, .danger, .icon-button {
+  border-radius: 4px;
+  padding: 9px 14px;
+  font-weight: 600;
+}
+.primary { border: 1px solid var(--skku); background: var(--skku); color: white; }
+.primary:hover { background: #083f70; }
+.secondary { border: 1px solid #aab6c2; background: white; color: #405267; }
+.danger { border: 1px solid #dbb2b2; background: #fff; color: var(--danger); padding: 5px 9px; }
+.upload-actions { margin-top: 15px; }
+.feedback { min-height: 21px; margin-top: 9px; color: var(--green); font-size: 13px; }
+.list { list-style: none; margin: 17px 0 0; padding: 0; border-top: 1px solid #edf0f2; }
+.list li { min-height: 45px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #edf0f2; }
+.file-meta { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.file-icon { width: 28px; height: 32px; border: 1px solid #cc4b4b; color: #b83939; display: grid; place-items: center; font-size: 10px; font-weight: 700; }
+.file-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-size { color: var(--muted); font-size: 12px; }
+.site-form { display: flex; gap: 8px; }
+.site-form input, .chat-form input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid #aeb9c5;
+  border-radius: 4px;
+  padding: 10px 11px;
+  color: var(--ink);
+}
+.site-form input:focus, .chat-form input:focus { outline: 2px solid #a9ccea; border-color: var(--skku); }
+.site-list li code { color: #3d5369; font: 13px ui-monospace, monospace; }
+.mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
+.mode {
+  border: 1px solid #b9c5d0;
+  border-radius: 5px;
+  padding: 12px 13px;
+  background: white;
+  color: #405166;
+  text-align: left;
+}
+.mode strong { display: block; color: #2d4158; margin-bottom: 3px; }
+.mode small { display: block; color: var(--muted); line-height: 1.35; }
+.mode.active { border: 2px solid var(--skku); padding: 11px 12px; background: #f1f7fc; }
+.mode.active strong { color: var(--skku); }
+.chat-layout { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 18px; }
+.chat-card { display: flex; flex-direction: column; min-height: 590px; }
+.chat-toolbar { padding: 11px 18px; border-bottom: 1px solid var(--line); color: var(--muted); display: flex; justify-content: space-between; }
+.online { color: var(--green); font-weight: 600; }
+.messages { flex: 1; overflow: auto; max-height: 465px; padding: 20px; background: #fbfcfd; }
+.message { display: flex; gap: 10px; margin-bottom: 18px; }
+.message.user { flex-direction: row-reverse; }
+.avatar { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 50%; display: grid; place-items: center; background: var(--skku); color: white; font-size: 12px; font-weight: 700; }
+.message.user .avatar { background: #7b8795; }
+.bubble-wrap { max-width: min(78%, 650px); }
+.who { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+.message.user .who { text-align: right; }
+.bubble { padding: 11px 13px; border-radius: 4px 12px 12px 12px; border: 1px solid #d7e1e9; background: white; white-space: pre-wrap; }
+.message.user .bubble { background: #eaf3fa; border-color: #c9dce9; border-radius: 12px 4px 12px 12px; }
+.tool-row { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.tool-chip { border-radius: 10px; background: #eaf5e5; color: #4d7535; padding: 2px 7px; font-size: 10px; }
+.timing { margin-top: 5px; color: #8491a0; font-size: 10px; }
+.chat-form { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--line); background: white; }
+.chat-form input { padding: 11px 12px; }
+.chat-form button { width: 70px; }
+.voice-panel { align-self: start; text-align: center; }
+.voice-panel .card-body { padding: 28px 18px; }
+.voice-orb {
+  width: 116px; height: 116px; border-radius: 50%; border: 0;
+  margin: 9px auto 16px; display: grid; place-items: center;
+  color: white; background: var(--skku); box-shadow: 0 0 0 9px #e7f0f7;
+  font-weight: 700; transition: .2s;
+}
+.voice-orb.hearing { background: #3385c6; box-shadow: 0 0 0 13px #dcecf8; transform: scale(1.03); }
+.voice-orb.thinking { background: #72579c; box-shadow: 0 0 0 9px #ece6f4; }
+.voice-orb.speaking { background: var(--green); box-shadow: 0 0 0 13px #e3efdc; }
+.voice-orb:disabled { cursor: default; }
+.voice-status { color: #40546b; font-weight: 600; }
+.voice-help { color: var(--muted); font-size: 12px; margin: 8px 0 16px; }
+.voice-controls { display: flex; justify-content: center; gap: 7px; }
+.hidden { display: none !important; }
+.screen[hidden] { display: none; }
+.empty { color: var(--muted); padding: 15px 0; text-align: center; }
+@media (max-width: 1050px) {
+  .teacher-grid, .chat-layout { grid-template-columns: 1fr; }
+  .voice-panel { width: 100%; }
+}
+@media (max-width: 760px) {
+  .global-nav { display: none; }
+  .app { margin-left: 0; }
+  .course-layout { grid-template-columns: 1fr; }
+  .course-nav { display: none; }
+  .topbar { padding: 0 14px; }
+  .wordmark strong { display: none; }
+  .content { padding: 18px 14px 36px; }
+  .user-name { display: none; }
+  .mode-grid { grid-template-columns: 1fr; }
+  .page-heading { align-items: flex-start; flex-direction: column; }
+}
+</style>
+</head>
+<body>
+<nav class="global-nav" aria-label="i-Campus 전역 메뉴">
+  <div class="brand-mark"><div class="brand-seal" aria-label="성균관대학교">S</div></div>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 4-7 8-7s7 2 8 7"/></svg><span>계정</span></button>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg><span>대시보드</span></button>
+  <button class="global-item active" type="button"><svg viewBox="0 0 24 24"><path d="M3 6l9-3 9 3-9 3zM5 9v7l7 3 7-3V9"/></svg><span>과목</span></button>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M4 5h16v15H4zM8 3v4M16 3v4M4 10h16"/></svg><span>캘린더</span></button>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 6l9 7 9-7"/></svg><span>받은메시지</span></button>
+  <div class="global-spacer"></div>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.6 2.6 0 015 1c0 2-2.5 2.2-2.5 4M12 18h.01"/></svg><span>도움말</span></button>
+</nav>
+
+<div class="app">
+  <header class="topbar">
+    <div class="wordmark"><strong>SUNGKYUNKWAN UNIVERSITY</strong><span>i-Campus</span></div>
+    <div class="top-actions">
+      <span class="user-name" id="user-name">김성균 학습자</span>
+      <div class="role-toggle" aria-label="사용자 역할 전환">
+        <button id="student-toggle" class="active" type="button">학습자</button>
+        <button id="teacher-toggle" type="button">교수자</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="course-layout">
+    <aside class="course-nav">
+      <div class="course-code">2026학년도 2학기</div>
+      <div class="course-name">시계열데이터처리개론<br><small>STA3021-01</small></div>
+      <nav class="course-menu" aria-label="과목 메뉴">
+        <button type="button">홈</button>
+        <button type="button">공지사항</button>
+        <button type="button">주차학습</button>
+        <button type="button">강의자료</button>
+        <button type="button">과제</button>
+        <button class="active" type="button">KINGO VOICE TA</button>
+        <button type="button">성적</button>
+        <button type="button">출결/학습현황</button>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <div class="breadcrumb">과목 &gt; 시계열데이터처리개론 &gt; <b>KINGO VOICE TA</b></div>
+
+      <section id="student-screen" class="screen">
+        <div class="page-heading">
+          <div><h1>KINGO VOICE TA</h1><p>강의자료를 근거로 함께 답을 찾아가는 AI 음성 조교</p></div>
+          <span class="term-badge">학습자 화면</span>
+        </div>
+        <div class="notice">AI 답변은 강의자료의 파일명과 페이지를 근거로 제공합니다. 중요한 내용은 담당 교수자의 안내와 원문을 함께 확인하세요.</div>
+
+        <div class="mode-grid" role="radiogroup" aria-label="챗봇 답변 모드">
+          <button class="mode" data-mode="explain" type="button" role="radio" aria-checked="false"><strong>설명 모드</strong><small>개념과 예시를 직접 설명하고 이해를 확인합니다.</small></button>
+          <button class="mode active" data-mode="socratic" type="button" role="radio" aria-checked="true"><strong>소크라테스 모드</strong><small>질문과 단계별 힌트로 스스로 답을 찾게 합니다.</small></button>
+          <button class="mode" data-mode="solution" type="button" role="radio" aria-checked="false"><strong>해설 모드</strong><small>문제의 가정과 풀이 과정을 순서대로 해설합니다.</small></button>
+        </div>
+
+        <div class="chat-layout">
+          <section class="card chat-card" aria-label="AI 조교 채팅">
+            <div class="card-head"><h2>시계열데이터처리개론 AI 조교</h2><small class="online">● 이용 가능</small></div>
+            <div class="chat-toolbar"><span id="current-mode-label">소크라테스 모드</span><button id="new-chat" class="secondary" type="button">새 대화</button></div>
+            <div id="messages" class="messages" aria-live="polite"></div>
+            <form id="chat-form" class="chat-form">
+              <input id="chat-input" maxlength="4000" autocomplete="off" placeholder="예: 정상성과 차분의 관계를 설명해줘" aria-label="AI 조교에게 질문">
+              <button class="primary" type="submit">전송</button>
+            </form>
+          </section>
+
+          <aside class="card voice-panel">
+            <div class="card-head"><h2>음성으로 질문</h2></div>
+            <div class="card-body">
+              <button id="voice-orb" class="voice-orb" type="button" aria-label="음성 대화 시작">음성 시작</button>
+              <div id="voice-status" class="voice-status">마이크가 꺼져 있습니다</div>
+              <p class="voice-help">한 번 시작하면 버튼 없이 자연스럽게 이어서 대화할 수 있습니다.</p>
+              <div class="voice-controls">
+                <button id="mute" class="secondary hidden" type="button">음소거</button>
+                <button id="stop-voice" class="secondary hidden" type="button">종료</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+        <audio id="player"></audio>
+      </section>
+
+      <section id="teacher-screen" class="screen" hidden>
+        <div class="page-heading">
+          <div><h1>KINGO VOICE TA 설정</h1><p>시계열데이터처리개론의 AI 조교 근거와 검색 정책을 관리합니다.</p></div>
+          <span class="term-badge">교수자 화면</span>
+        </div>
+        <div class="notice">업로드한 PDF는 즉시 과목 지식베이스에 반영됩니다. 외부 웹 검색은 아래 신뢰 사이트로만 제한됩니다.</div>
+
+        <div class="teacher-grid">
+          <section class="card">
+            <div class="card-head"><h2>강의 자료 관리</h2><small>PDF · 최대 25MB</small></div>
+            <div class="card-body">
+              <p class="setting-intro">강의안, 읽기자료, FAQ를 업로드하면 학생 답변의 우선 근거로 사용합니다.</p>
+              <div class="upload-box">
+                <input id="material-file" type="file" accept="application/pdf,.pdf" aria-label="강의 PDF 선택">
+                <div class="upload-actions"><button id="upload-material" class="primary" type="button">선택한 자료 업로드</button></div>
+                <div id="upload-feedback" class="feedback" role="status"></div>
+              </div>
+              <ul id="material-list" class="list"></ul>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2>신뢰 사이트 관리</h2><small>외부 검색 허용 목록</small></div>
+            <div class="card-body">
+              <p class="setting-intro">강의자료에 근거가 부족할 때만 아래 도메인에서 보충 근거를 찾습니다.</p>
+              <form id="site-form" class="site-form">
+                <input id="site-input" type="text" maxlength="500" placeholder="예: kosis.kr" aria-label="신뢰 사이트 주소">
+                <button class="primary" type="submit">추가</button>
+              </form>
+              <div id="site-feedback" class="feedback" role="status"></div>
+              <ul id="site-list" class="list site-list"></ul>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+const byId = (id) => document.getElementById(id);
+let activeRole = "student";
+let learningMode = "socratic";
+let ws = null;
+let audioContext = null;
+let micStream = null;
+let state = "idle";
+let muted = false;
+let pendingVoice = null;
+
+function setRole(role) {
+  activeRole = role;
+  const teacher = role === "teacher";
+  byId("student-screen").hidden = teacher;
+  byId("teacher-screen").hidden = !teacher;
+  byId("student-toggle").classList.toggle("active", !teacher);
+  byId("teacher-toggle").classList.toggle("active", teacher);
+  byId("user-name").textContent = teacher ? "박성균 교수자" : "김성균 학습자";
+  if (teacher) loadTeacherData();
+}
+byId("student-toggle").addEventListener("click", () => setRole("student"));
+byId("teacher-toggle").addEventListener("click", () => setRole("teacher"));
+
+const modeLabels = { explain: "설명 모드", socratic: "소크라테스 모드", solution: "해설 모드" };
+document.querySelectorAll(".mode").forEach((button) => {
+  button.addEventListener("click", () => {
+    learningMode = button.dataset.mode;
+    document.querySelectorAll(".mode").forEach((item) => {
+      const active = item === button;
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-checked", String(active));
+    });
+    byId("current-mode-label").textContent = modeLabels[learningMode];
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "mode", mode: learningMode }));
+    }
+  });
+});
+
+function addMessage(role, text, tools, timings) {
+  const row = document.createElement("div");
+  row.className = "message " + role;
+  const avatar = document.createElement("div");
+  avatar.className = "avatar";
+  avatar.textContent = role === "user" ? "나" : "TA";
+  const wrap = document.createElement("div");
+  wrap.className = "bubble-wrap";
+  const who = document.createElement("div");
+  who.className = "who";
+  who.textContent = role === "user" ? "나" : "KINGO VOICE TA";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = text;
+  wrap.append(who, bubble);
+  if (tools && tools.length) {
+    const toolRow = document.createElement("div");
+    toolRow.className = "tool-row";
+    tools.forEach((tool) => {
+      const chip = document.createElement("span");
+      chip.className = "tool-chip";
+      chip.textContent = tool;
+      toolRow.appendChild(chip);
+    });
+    wrap.appendChild(toolRow);
+  }
+  if (timings && timings.total !== undefined) {
+    const timing = document.createElement("div");
+    timing.className = "timing";
+    timing.textContent = "응답 " + timings.total + "ms";
+    wrap.appendChild(timing);
+  }
+  row.append(avatar, wrap);
+  byId("messages").appendChild(row);
+  byId("messages").scrollTop = byId("messages").scrollHeight;
+}
+
+function resetMessages() {
+  byId("messages").replaceChildren();
+  addMessage("assistant", "안녕하세요. 시계열데이터처리개론 KINGO VOICE TA입니다. 강의 내용 중 막힌 부분을 텍스트나 음성으로 질문해 주세요.");
+}
+resetMessages();
+
+byId("chat-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = byId("chat-input");
+  const text = input.value.trim();
+  if (!text) return;
+  addMessage("user", text);
+  input.value = "";
+  input.disabled = true;
+  try {
+    const response = await fetch("/answer-text", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text, mode: learningMode }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "답변을 생성하지 못했습니다.");
+    addMessage("assistant", data.reply, data.tools, data.timings);
+  } catch (error) {
+    addMessage("assistant", "오류: " + error.message);
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+});
+
+byId("new-chat").addEventListener("click", async () => {
+  await fetch("/reset", { method: "POST" });
+  resetMessages();
+});
+
+async function loadTeacherData() {
+  const [materialsResponse, sitesResponse] = await Promise.all([
+    fetch("/api/materials"),
+    fetch("/api/trusted-sites"),
+  ]);
+  if (materialsResponse.ok) renderMaterials((await materialsResponse.json()).materials);
+  if (sitesResponse.ok) renderSites((await sitesResponse.json()).sites);
+}
+
+function formatBytes(size) {
+  if (size < 1024) return size + " B";
+  if (size < 1024 * 1024) return Math.round(size / 1024) + " KB";
+  return (size / 1024 / 1024).toFixed(1) + " MB";
+}
+
+function renderMaterials(materials) {
+  const list = byId("material-list");
+  list.replaceChildren();
+  if (!materials.length) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "업로드된 강의자료가 없습니다.";
+    list.appendChild(empty);
+    return;
+  }
+  materials.forEach((material) => {
+    const item = document.createElement("li");
+    const meta = document.createElement("div");
+    meta.className = "file-meta";
+    const icon = document.createElement("span");
+    icon.className = "file-icon";
+    icon.textContent = "PDF";
+    const name = document.createElement("span");
+    name.className = "file-name";
+    name.textContent = material.name;
+    const size = document.createElement("span");
+    size.className = "file-size";
+    size.textContent = formatBytes(material.size);
+    meta.append(icon, name);
+    item.append(meta, size);
+    list.appendChild(item);
+  });
+}
+
+byId("upload-material").addEventListener("click", async () => {
+  const file = byId("material-file").files[0];
+  const feedback = byId("upload-feedback");
+  if (!file) {
+    feedback.textContent = "업로드할 PDF를 선택하세요.";
+    return;
+  }
+  feedback.textContent = "업로드 중...";
+  try {
+    const response = await fetch("/api/materials?filename=" + encodeURIComponent(file.name), {
+      method: "POST",
+      headers: { "Content-Type": "application/pdf" },
+      body: file,
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "업로드 실패");
+    feedback.textContent = data.material.name + " 자료를 반영했습니다.";
+    byId("material-file").value = "";
+    loadTeacherData();
+  } catch (error) {
+    feedback.textContent = error.message;
+  }
+});
+
+function renderSites(sites) {
+  const list = byId("site-list");
+  list.replaceChildren();
+  sites.forEach((site) => {
+    const item = document.createElement("li");
+    const domain = document.createElement("code");
+    domain.textContent = site;
+    const remove = document.createElement("button");
+    remove.className = "danger";
+    remove.type = "button";
+    remove.textContent = "삭제";
+    remove.addEventListener("click", () => deleteSite(site));
+    item.append(domain, remove);
+    list.appendChild(item);
+  });
+}
+
+byId("site-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = byId("site-input");
+  const value = input.value.trim();
+  if (!value) return;
+  const feedback = byId("site-feedback");
+  try {
+    const response = await fetch("/api/trusted-sites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: value }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "추가 실패");
+    renderSites(data.sites);
+    input.value = "";
+    feedback.textContent = "신뢰 사이트를 추가했습니다.";
+  } catch (error) {
+    feedback.textContent = error.message;
+  }
+});
+
+async function deleteSite(site) {
+  const response = await fetch("/api/trusted-sites", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: site }),
+  });
+  const data = await response.json();
+  if (response.ok) {
+    renderSites(data.sites);
+    byId("site-feedback").textContent = "신뢰 사이트를 삭제했습니다.";
+  }
+}
+
+const SAMPLE_RATE = 16000;
+const FRAME_SAMPLES = 320;
+let pcmBuffer = new Float32Array(0);
+
+function setVoiceState(next, label) {
+  state = next;
+  const orb = byId("voice-orb");
+  orb.className = "voice-orb " + next;
+  orb.textContent = label;
+  byId("voice-status").textContent = label;
+}
+
+async function startVoice() {
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+    if (audioContext.sampleRate !== SAMPLE_RATE) throw new Error("Chrome 또는 Edge에서 실행해 주세요.");
+    await audioContext.audioWorklet.addModule("worklet.js");
+    const source = audioContext.createMediaStreamSource(micStream);
+    const capture = new AudioWorkletNode(audioContext, "pcm-capture");
+    source.connect(capture);
+    capture.port.onmessage = (event) => sendSamples(event.data);
+    byId("player").play().catch(() => {});
+    connectSocket();
+    byId("voice-orb").disabled = true;
+    byId("mute").classList.remove("hidden");
+    byId("stop-voice").classList.remove("hidden");
+    setVoiceState("listening", "듣는 중");
+  } catch (error) {
+    byId("voice-status").textContent = "마이크 오류: " + error.message;
+  }
+}
+byId("voice-orb").addEventListener("click", startVoice);
+
+function connectSocket() {
+  const protocol = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(protocol + "://" + location.host + "/stream");
+  ws.onopen = () => ws.send(JSON.stringify({ type: "mode", mode: learningMode }));
+  ws.onclose = () => setVoiceState("idle", "연결 종료");
+  ws.onmessage = (event) => handleSocket(JSON.parse(event.data));
+}
+
+function sendSamples(block) {
+  if (muted || activeRole !== "student" || state === "speaking") return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const joined = new Float32Array(pcmBuffer.length + block.length);
+  joined.set(pcmBuffer);
+  joined.set(block, pcmBuffer.length);
+  pcmBuffer = joined;
+  while (pcmBuffer.length >= FRAME_SAMPLES) {
+    const frame = pcmBuffer.subarray(0, FRAME_SAMPLES);
+    pcmBuffer = pcmBuffer.slice(FRAME_SAMPLES);
+    const int16 = new Int16Array(FRAME_SAMPLES);
+    for (let i = 0; i < FRAME_SAMPLES; i++) {
+      const sample = Math.max(-1, Math.min(1, frame[i]));
+      int16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+    }
+    ws.send(JSON.stringify({ type: "audio", data: toBase64(new Uint8Array(int16.buffer)) }));
+  }
+}
+
+function handleSocket(message) {
+  if (message.type === "vad") {
+    if (message.speaking) setVoiceState("hearing", "말씀 듣는 중");
+    else setVoiceState("listening", "듣는 중");
+  } else if (message.type === "turn") {
+    pendingVoice = {};
+    setVoiceState("thinking", "답변 준비 중");
+  } else if (message.type === "transcript") {
+    if (pendingVoice) pendingVoice.transcript = message.text;
+  } else if (message.type === "audio_start") {
+    setVoiceState("speaking", "답변 중");
+    startPlayback();
+  } else if (message.type === "audio_chunk") {
+    enqueueChunk(fromBase64(message.data));
+  } else if (message.type === "audio_end") {
+    if (pendingVoice) {
+      pendingVoice.reply = message.reply;
+      pendingVoice.tools = message.tools;
+      pendingVoice.timings = message.timings;
+      addMessage("user", pendingVoice.transcript || "(음성 질문)");
+      addMessage("assistant", pendingVoice.reply, pendingVoice.tools, pendingVoice.timings);
+      pendingVoice = null;
+    }
+    finishPlayback();
+  } else if (message.type === "listening") {
+    setVoiceState("listening", "듣는 중");
+  } else if (message.type === "error") {
+    addMessage("assistant", "오류: " + message.message);
+    setVoiceState("listening", "듣는 중");
+  }
+}
+
+const useMediaSource = "MediaSource" in window && MediaSource.isTypeSupported("audio/mpeg");
+let mediaSource = null;
+let sourceBuffer = null;
+let chunkQueue = [];
+let streamEnded = false;
+let blobChunks = [];
+
+function startPlayback() {
+  const player = byId("player");
+  player.onended = playbackDone;
+  player.onerror = playbackDone;
+  if (!useMediaSource) {
+    blobChunks = [];
+    return;
+  }
+  chunkQueue = [];
+  streamEnded = false;
+  sourceBuffer = null;
+  mediaSource = new MediaSource();
+  player.src = URL.createObjectURL(mediaSource);
+  mediaSource.addEventListener("sourceopen", () => {
+    sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+    sourceBuffer.addEventListener("updateend", pump);
+    pump();
+  }, { once: true });
+  player.play().catch(() => {});
+}
+
+function enqueueChunk(bytes) {
+  if (useMediaSource) {
+    chunkQueue.push(bytes);
+    pump();
+  } else {
+    blobChunks.push(bytes);
+  }
+}
+
+function pump() {
+  if (!sourceBuffer || sourceBuffer.updating) return;
+  if (chunkQueue.length) sourceBuffer.appendBuffer(chunkQueue.shift());
+  else if (streamEnded && mediaSource.readyState === "open") mediaSource.endOfStream();
+}
+
+function finishPlayback() {
+  if (useMediaSource) {
+    streamEnded = true;
+    pump();
+  } else {
+    const player = byId("player");
+    player.src = URL.createObjectURL(new Blob(blobChunks, { type: "audio/mpeg" }));
+    player.play().catch(() => {});
+  }
+}
+
+function playbackDone() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "playback_done" }));
+  }
+}
+
+byId("mute").addEventListener("click", () => {
+  muted = !muted;
+  byId("mute").textContent = muted ? "음소거 해제" : "음소거";
+  byId("voice-status").textContent = muted ? "마이크 음소거" : "듣는 중";
+});
+
+byId("stop-voice").addEventListener("click", () => {
+  if (ws) ws.close();
+  if (micStream) micStream.getTracks().forEach((track) => track.stop());
+  if (audioContext) audioContext.close();
+  ws = null;
+  micStream = null;
+  audioContext = null;
+  byId("voice-orb").disabled = false;
+  byId("mute").classList.add("hidden");
+  byId("stop-voice").classList.add("hidden");
+  setVoiceState("idle", "음성 시작");
+});
+
+function toBase64(bytes) {
+  let value = "";
+  bytes.forEach((byte) => value += String.fromCharCode(byte));
+  return btoa(value);
+}
+function fromBase64(value) {
+  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+}
+</script>
+</body>
+</html>
