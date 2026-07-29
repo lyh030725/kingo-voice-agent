@@ -31,51 +31,48 @@ button { cursor: pointer; }
 .global-nav {
   position: fixed;
   inset: 0 auto 0 0;
-  width: 84px;
+  width: 76px;
   z-index: 20;
-  background: var(--skku-deep);
+  background: #063f6d;
   color: white;
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  overflow-y: auto;
 }
 .brand-mark {
-  height: 82px;
+  height: 72px;
   display: grid;
   place-items: center;
-  background: #071b2e;
-  border-bottom: 1px solid rgba(255,255,255,.13);
+  background: #063f6d;
 }
-.brand-seal {
-  width: 48px;
-  height: 48px;
-  border: 2px solid #e9c86e;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: #e9c86e;
-  font: 700 25px Georgia, serif;
+.brand-logo {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
 }
 .global-item {
-  min-height: 70px;
-  padding: 9px 4px;
+  min-height: 61px;
+  padding: 6px 2px;
   border: 0;
-  border-left: 4px solid transparent;
   background: transparent;
   color: #e9f1f7;
   display: grid;
   place-items: center;
   gap: 2px;
   text-align: center;
-  font-size: 11px;
+  font-size: 12px;
 }
 .global-item svg { width: 23px; height: 23px; stroke: currentColor; fill: none; stroke-width: 1.7; }
-.global-item.active { background: rgba(255,255,255,.12); border-left-color: #e9c86e; color: white; }
+.global-item:hover { background: rgba(255,255,255,.1); }
+.global-item.active { background: white; color: #164d77; }
+.global-item.active:hover { background: white; }
 .global-spacer { flex: 1; }
-.app { margin-left: 84px; min-height: 100vh; }
+.app { margin-left: 76px; min-height: 100vh; }
 .topbar {
-  height: 68px;
-  padding: 0 28px;
+  height: 64px;
+  padding: 0 22px;
   background: white;
   border-bottom: 1px solid var(--line);
   display: flex;
@@ -85,9 +82,10 @@ button { cursor: pointer; }
   top: 0;
   z-index: 10;
 }
-.wordmark { display: flex; align-items: baseline; gap: 12px; }
-.wordmark strong { color: var(--skku-dark); font-size: 19px; letter-spacing: -.4px; }
-.wordmark span { color: var(--skku); font-size: 22px; font-weight: 300; border-left: 1px solid var(--line); padding-left: 12px; }
+.course-context { display: flex; align-items: center; min-width: 0; color: #3b5269; }
+.course-context span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.course-context b { color: #174f7a; font-weight: 500; }
+.hamburger { border: 0; background: transparent; color: #164f79; padding: 8px 18px 8px 0; font-size: 25px; line-height: 1; }
 .top-actions { display: flex; align-items: center; gap: 16px; }
 .user-name { color: #46576a; font-size: 13px; }
 .role-toggle {
@@ -106,36 +104,29 @@ button { cursor: pointer; }
   font-weight: 600;
 }
 .role-toggle button.active { color: white; background: var(--skku); box-shadow: var(--shadow); }
-.course-layout { display: grid; grid-template-columns: 226px minmax(0, 1fr); min-height: calc(100vh - 68px); }
+.course-layout { display: grid; grid-template-columns: 204px minmax(0, 1fr); min-height: calc(100vh - 64px); }
 .course-nav {
-  background: white;
-  border-right: 1px solid var(--line);
-  padding: 27px 0;
+  background: #f1f4f8;
+  border-right: 1px solid #e2e7ec;
+  padding: 19px 10px;
 }
-.course-code { color: var(--muted); font-size: 11px; padding: 0 24px 4px; }
-.course-name {
-  padding: 0 24px 20px;
-  color: var(--skku-dark);
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.35;
-  border-bottom: 1px solid #edf0f3;
-}
-.course-menu { padding: 12px 0; }
+.course-code { color: #607286; font-size: 12px; padding: 0 10px 8px; }
+.course-menu { padding: 0; }
 .course-menu button {
   width: 100%;
-  border: 0;
-  border-left: 4px solid transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
   background: transparent;
   color: #435268;
-  padding: 10px 24px 10px 20px;
+  padding: 7px 9px;
   text-align: left;
+  font-size: 13px;
 }
-.course-menu button:hover { background: #f2f5f8; color: var(--skku); }
+.course-menu button:hover { background: #e7edf3; color: var(--skku); }
 .course-menu button.active {
   color: var(--skku);
-  border-left-color: var(--skku);
-  background: #eef5fb;
+  border-color: #79a7ce;
+  background: white;
   font-weight: 700;
 }
 .content { min-width: 0; padding: 24px 34px 48px; }
@@ -278,7 +269,7 @@ button { cursor: pointer; }
   .course-layout { grid-template-columns: 1fr; }
   .course-nav { display: none; }
   .topbar { padding: 0 14px; }
-  .wordmark strong { display: none; }
+  .course-context b { display: none; }
   .content { padding: 18px 14px 36px; }
   .user-name { display: none; }
   .mode-grid { grid-template-columns: 1fr; }
@@ -288,19 +279,22 @@ button { cursor: pointer; }
 </head>
 <body>
 <nav class="global-nav" aria-label="i-Campus 전역 메뉴">
-  <div class="brand-mark"><div class="brand-seal" aria-label="성균관대학교">S</div></div>
+  <div class="brand-mark"><img class="brand-logo" src="skku-symbol.png" alt="성균관대학교"></div>
   <button class="global-item" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 4-7 8-7s7 2 8 7"/></svg><span>계정</span></button>
-  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg><span>대시보드</span></button>
-  <button class="global-item active" type="button"><svg viewBox="0 0 24 24"><path d="M3 6l9-3 9 3-9 3zM5 9v7l7 3 7-3V9"/></svg><span>과목</span></button>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3 8-8 10-5-2-8-5-8-10V6z"/><path d="M9 12l2 2 4-5"/></svg><span>관리자</span></button>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M6 15a7 7 0 0112 0M12 12l4-4"/></svg><span>대시보드</span></button>
+  <button class="global-item active" type="button"><svg viewBox="0 0 24 24"><path d="M5 3h13a2 2 0 012 2v16H7a3 3 0 01-3-3V4a1 1 0 011-1z"/><path d="M7 3v14h13"/></svg><span>과목</span></button>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M2 20c0-4 2-7 6-7s6 3 6 7M12 14c1-.7 2-1 4-1 4 0 6 3 6 7"/></svg><span>그룹</span></button>
   <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M4 5h16v15H4zM8 3v4M16 3v4M4 10h16"/></svg><span>캘린더</span></button>
-  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 6l9 7 9-7"/></svg><span>받은메시지</span></button>
-  <div class="global-spacer"></div>
-  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.6 2.6 0 015 1c0 2-2.5 2.2-2.5 4M12 18h.01"/></svg><span>도움말</span></button>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 6l9 7 9-7"/></svg><span>메시지함</span></button>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M7 4h10v17H7zM9 2h6v4H9zM10 10h4M10 14h4M10 18h4"/></svg><span>전체게시물</span></button>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg><span>마이페이지</span></button>
+  <button class="global-item" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.6 2.6 0 015 1c0 2-2.5 2.2-2.5 4M12 18h.01"/></svg><span>이용안내</span></button>
 </nav>
 
 <div class="app">
   <header class="topbar">
-    <div class="wordmark"><strong>SUNGKYUNKWAN UNIVERSITY</strong><span>i-Campus</span></div>
+    <div class="course-context"><button class="hamburger" type="button" aria-label="과목 메뉴 열기">☰</button><span><b>시계열데이터처리개론_STA3021_01</b> &nbsp;›&nbsp; KINGO VOICE TA</span></div>
     <div class="top-actions">
       <span class="user-name" id="user-name">김성균 학습자</span>
       <div class="role-toggle" aria-label="사용자 역할 전환">
@@ -312,17 +306,19 @@ button { cursor: pointer; }
 
   <div class="course-layout">
     <aside class="course-nav">
-      <div class="course-code">2026학년도 2학기</div>
-      <div class="course-name">시계열데이터처리개론<br><small>STA3021-01</small></div>
+      <div class="course-code">2026년 2학기</div>
       <nav class="course-menu" aria-label="과목 메뉴">
-        <button type="button">홈</button>
-        <button type="button">공지사항</button>
-        <button type="button">주차학습</button>
-        <button type="button">강의자료</button>
-        <button type="button">과제</button>
-        <button class="active" type="button">KINGO VOICE TA</button>
-        <button type="button">성적</button>
-        <button type="button">출결/학습현황</button>
+        <button type="button">⌂ &nbsp;홈</button>
+        <button type="button">▤ &nbsp;수업 계획서</button>
+        <button type="button">♧ &nbsp;공지</button>
+        <button type="button">▧ &nbsp;게시판</button>
+        <button type="button">▱ &nbsp;강의콘텐츠</button>
+        <button type="button">· &nbsp;과제 및 평가</button>
+        <button type="button">· &nbsp;시험 및 설문</button>
+        <button type="button">♙ &nbsp;출결현황</button>
+        <button type="button">▣ &nbsp;학습 활동 현황</button>
+        <button type="button">▧ &nbsp;성적</button>
+        <button class="active" type="button">♧ &nbsp;KINGO VOICE TA</button>
       </nav>
     </aside>
 
