@@ -188,8 +188,22 @@ button { cursor: pointer; }
   border-radius: 4px;
   padding: 24px;
   text-align: center;
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, box-shadow .15s;
 }
-.upload-box input { width: min(100%, 360px); color: #4c5d71; }
+.upload-box:hover, .upload-box.is-dragging {
+  border-color: var(--course-agent-primary-green);
+  background: #f1f9f6;
+  box-shadow: inset 0 0 0 1px rgba(0, 102, 79, .1);
+}
+.upload-box:focus-visible { outline: 2px solid #87b7a8; outline-offset: 2px; }
+.upload-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.upload-title { color: #2c4057; font-size: 15px; font-weight: 700; }
+.upload-hint, .upload-selection { color: var(--muted); font-size: 13px; }
+.upload-selection { color: var(--course-agent-primary-green); font-weight: 600; }
 .primary, .secondary, .danger, .icon-button {
   border-radius: 4px;
   padding: 9px 14px;
@@ -197,9 +211,10 @@ button { cursor: pointer; }
 }
 .primary { border: 1px solid var(--skku); background: var(--skku); color: white; }
 .primary:hover { background: #083f70; }
+.primary:disabled, .secondary:disabled { cursor: not-allowed; opacity: .55; }
 .secondary { border: 1px solid #aab6c2; background: white; color: #405267; }
 .danger { border: 1px solid #dbb2b2; background: #fff; color: var(--danger); padding: 5px 9px; }
-.upload-actions { margin-top: 15px; }
+.upload-actions { margin-top: 15px; display: flex; justify-content: center; gap: 8px; }
 .feedback { min-height: 21px; margin-top: 9px; color: var(--green); font-size: 13px; }
 .list { list-style: none; margin: 17px 0 0; padding: 0; border-top: 1px solid #edf0f2; }
 .list li { min-height: 45px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #edf0f2; }
@@ -207,6 +222,7 @@ button { cursor: pointer; }
 .file-icon { width: 28px; height: 32px; border: 1px solid #cc4b4b; color: #b83939; display: grid; place-items: center; font-size: 10px; font-weight: 700; }
 .file-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-size { color: var(--muted); font-size: 12px; }
+.file-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .site-form { display: flex; gap: 8px; }
 .site-form input, .chat-form input {
   min-width: 0;
@@ -217,7 +233,9 @@ button { cursor: pointer; }
   color: var(--ink);
 }
 .site-form input:focus, .chat-form input:focus { outline: 2px solid #a9ccea; border-color: var(--skku); }
-.site-list li code { color: #3d5369; font: 13px ui-monospace, monospace; }
+.site-link { color: #3d5369; font: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.site-link:hover { color: var(--skku); text-decoration: underline; }
+.site-link:focus-visible { outline: 2px solid #a9ccea; outline-offset: 3px; }
 .mode-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 18px; }
 .mode {
   border: 1px solid #b9c5d0;
@@ -390,11 +408,17 @@ button { cursor: pointer; }
             <div class="card-head"><h2>강의 자료 관리</h2><small>PDF · 최대 25MB</small></div>
             <div class="card-body">
               <p class="setting-intro">강의안, 읽기자료, FAQ를 업로드하면 학생 답변의 우선 근거로 사용합니다.</p>
-              <div class="upload-box">
-                <input id="material-file" type="file" accept="application/pdf,.pdf" aria-label="강의 PDF 선택">
-                <div class="upload-actions"><button id="upload-material" class="primary" type="button">선택한 자료 업로드</button></div>
-                <div id="upload-feedback" class="feedback" role="status"></div>
+              <label id="material-dropzone" class="upload-box" for="material-file" tabindex="0">
+                <input id="material-file" class="upload-input" type="file" accept="application/pdf,.pdf" multiple aria-label="강의 PDF 여러 개 선택">
+                <span class="upload-title">PDF를 여기에 놓으세요</span>
+                <span class="upload-hint">또는 클릭해서 여러 파일을 선택하세요 (파일당 최대 25MB)</span>
+                <span id="material-selection" class="upload-selection">선택된 파일 없음</span>
+              </label>
+              <div class="upload-actions">
+                <button id="upload-material" class="primary" type="button" disabled>선택한 자료 업로드</button>
+                <button id="cancel-material" class="secondary" type="button" disabled>선택 취소</button>
               </div>
+              <div id="upload-feedback" class="feedback" role="status"></div>
               <ul id="material-list" class="list"></ul>
             </div>
           </section>
@@ -428,6 +452,7 @@ let micStream = null;
 let state = "idle";
 let muted = false;
 let pendingVoice = null;
+let selectedMaterialFiles = [];
 
 function setRole(role) {
   activeRole = role;
@@ -648,42 +673,132 @@ function renderMaterials(materials) {
     const size = document.createElement("span");
     size.className = "file-size";
     size.textContent = formatBytes(material.size);
+    const actions = document.createElement("div");
+    actions.className = "file-actions";
+    const remove = document.createElement("button");
+    remove.className = "danger";
+    remove.type = "button";
+    remove.textContent = "삭제";
+    remove.addEventListener("click", () => deleteMaterial(material.name));
+    actions.append(size, remove);
     meta.append(icon, name);
-    item.append(meta, size);
+    item.append(meta, actions);
     list.appendChild(item);
   });
 }
 
-byId("upload-material").addEventListener("click", async () => {
-  const file = byId("material-file").files[0];
+const materialInput = byId("material-file");
+const materialDropzone = byId("material-dropzone");
+const uploadMaterialButton = byId("upload-material");
+const cancelMaterialButton = byId("cancel-material");
+
+function clearMaterialSelection() {
+  selectedMaterialFiles = [];
+  materialInput.value = "";
+  byId("material-selection").textContent = "선택된 파일 없음";
+  uploadMaterialButton.textContent = "선택한 자료 업로드";
+  uploadMaterialButton.disabled = true;
+  cancelMaterialButton.disabled = true;
+}
+
+function setMaterialFiles(fileList) {
+  const files = Array.from(fileList);
   const feedback = byId("upload-feedback");
-  if (!file) {
+  const invalid = files.find((file) => !file.name.toLowerCase().endsWith(".pdf") || file.size > 25 * 1024 * 1024);
+  if (invalid) {
+    clearMaterialSelection();
+    feedback.textContent = invalid.name + " 파일을 확인하세요. PDF만 가능하며 파일당 최대 25MB입니다.";
+    return;
+  }
+  selectedMaterialFiles = files;
+  byId("material-selection").textContent = files.length ? files.length + "개 파일 선택됨" : "선택된 파일 없음";
+  uploadMaterialButton.textContent = files.length > 1 ? files.length + "개 자료 업로드" : "선택한 자료 업로드";
+  uploadMaterialButton.disabled = !files.length;
+  cancelMaterialButton.disabled = !files.length;
+  feedback.textContent = "";
+}
+
+materialInput.addEventListener("change", () => setMaterialFiles(materialInput.files));
+cancelMaterialButton.addEventListener("click", () => {
+  clearMaterialSelection();
+  byId("upload-feedback").textContent = "파일 선택을 취소했습니다.";
+});
+materialDropzone.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    materialInput.click();
+  }
+});
+for (const eventName of ["dragenter", "dragover"]) {
+  materialDropzone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    materialDropzone.classList.add("is-dragging");
+  });
+}
+materialDropzone.addEventListener("dragleave", () => materialDropzone.classList.remove("is-dragging"));
+materialDropzone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  materialDropzone.classList.remove("is-dragging");
+  setMaterialFiles(event.dataTransfer.files);
+});
+
+uploadMaterialButton.addEventListener("click", async () => {
+  const files = selectedMaterialFiles.slice();
+  const feedback = byId("upload-feedback");
+  if (!files.length) {
     feedback.textContent = "업로드할 PDF를 선택하세요.";
     return;
   }
-  feedback.textContent = "업로드 중...";
+  uploadMaterialButton.disabled = true;
+  cancelMaterialButton.disabled = true;
+  const failures = [];
+  let uploaded = 0;
+  for (const [index, file] of files.entries()) {
+    feedback.textContent = (index + 1) + "/" + files.length + " 업로드 중: " + file.name;
+    try {
+      const response = await fetch("/api/materials?filename=" + encodeURIComponent(file.name), {
+        method: "POST",
+        headers: { "Content-Type": "application/pdf" },
+        body: file,
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "업로드 실패");
+      uploaded += 1;
+    } catch (error) {
+      failures.push(file.name + ": " + error.message);
+    }
+  }
+  clearMaterialSelection();
+  feedback.textContent = failures.length
+    ? uploaded + "개 반영, " + failures.length + "개 실패: " + failures.join(", ")
+    : uploaded + "개 자료를 반영했습니다.";
+  if (uploaded) await loadTeacherData();
+});
+
+async function deleteMaterial(filename) {
+  if (!window.confirm(filename + " 자료를 삭제할까요?")) return;
+  const feedback = byId("upload-feedback");
   try {
-    const response = await fetch("/api/materials?filename=" + encodeURIComponent(file.name), {
-      method: "POST",
-      headers: { "Content-Type": "application/pdf" },
-      body: file,
-    });
+    const response = await fetch("/api/materials?filename=" + encodeURIComponent(filename), { method: "DELETE" });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "업로드 실패");
-    feedback.textContent = data.material.name + " 자료를 반영했습니다.";
-    byId("material-file").value = "";
-    loadTeacherData();
+    if (!response.ok) throw new Error(data.detail || "삭제 실패");
+    feedback.textContent = filename + " 자료를 삭제했습니다.";
+    await loadTeacherData();
   } catch (error) {
     feedback.textContent = error.message;
   }
-});
+}
 
 function renderSites(sites) {
   const list = byId("site-list");
   list.replaceChildren();
   sites.forEach((site) => {
     const item = document.createElement("li");
-    const domain = document.createElement("code");
+    const domain = document.createElement("a");
+    domain.className = "site-link";
+    domain.href = "https://" + site;
+    domain.target = "_blank";
+    domain.rel = "noopener noreferrer";
     domain.textContent = site;
     const remove = document.createElement("button");
     remove.className = "danger";

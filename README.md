@@ -30,6 +30,8 @@ uv run uvicorn server:app --port 8000
 
 `.env`에 `XAI_API_KEY`, `TTS_VOICE`, `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`를 입력하고 Chrome 또는 Edge에서 <http://localhost:8000>에 접속합니다.
 
+취약 개념은 Moss와 함께 `memory/weak-concepts.json`에도 저장됩니다. Moss 사용 한도 오류가 발생하면 서버는 중단되지 않고 해당 프로세스 동안 로컬 파일에서 저장·회상·복습을 계속합니다.
+
 ## 에이전트 도구
 
 | 도구                      | 역할                                       |

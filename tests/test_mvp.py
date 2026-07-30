@@ -16,6 +16,36 @@ import server
 
 
 class MvpTests(unittest.TestCase):
+    def test_system_prompt_prefers_spoken_korean(self) -> None:
+        self.assertIn("polite 해요 style", brain.SYSTEM_PROMPT)
+        self.assertIn("Avoid written declarative endings", brain.SYSTEM_PROMPT)
+        self.assertIn("textbook or report-like prose", brain.SYSTEM_PROMPT)
+
+    def test_server_lifespan_survives_moss_quota(self) -> None:
+        class QuotaClient:
+            def __init__(self, _project_id, _project_key):
+                pass
+
+            async def session(self, **_kwargs):
+                raise RuntimeError("Moss usage limit exceeded")
+
+        async def scenario(store) -> None:
+            with (
+                patch.object(brain, "MOSS_MEMORY", store),
+                patch.object(brain, "_pdf_pages", return_value=[]),
+            ):
+                async with server.lifespan(server.app):
+                    self.assertTrue(store.is_local_mode)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = brain.MossMemoryStore(
+                "project-1",
+                "key-1",
+                local_path=Path(directory) / "weak-concepts.json",
+                sdk_loader=lambda: type("Sdk", (), {"MossClient": QuotaClient}),
+            )
+            asyncio.run(scenario(store))
+
     def test_course_agent_symbol_states_are_wired(self) -> None:
         root = Path(__file__).resolve().parents[1]
         component = (root / "static" / "course-agent-symbol.js").read_text(encoding="utf-8")
@@ -26,6 +56,10 @@ class MvpTests(unittest.TestCase):
         self.assertIn("prefers-reduced-motion: reduce", component)
         self.assertIn("animation: none !important", component)
         self.assertIn('id="course-agent-petal-gradient"', component)
+        self.assertIn("@keyframes course-agent-grow", component)
+        self.assertIn('class="growth-petal"', component)
+        self.assertIn('id="course-agent-fan-mask"', component)
+        self.assertIn("transform-origin: 50px 92px", component)
         self.assertIn('customElements.define("course-agent-symbol"', component)
         self.assertIn('setSymbolState(message, "sustain"), 500', page)
         self.assertIn('setSymbolState(message, "flow"), 300', page)
@@ -38,14 +72,40 @@ class MvpTests(unittest.TestCase):
         ):
             brain.PDF_PAGE_CACHE = [{"stale": True}]
             saved = brain.add_course_material("week-03.pdf", b"%PDF-1.4\nlesson")
+            second = brain.add_course_material("week-04.pdf", b"%PDF-1.4\nlesson")
 
             self.assertEqual(saved["name"], "week-03.pdf")
-            self.assertEqual(brain.list_course_materials(), [saved])
+            self.assertEqual(brain.list_course_materials(), [saved, second])
+            brain.PDF_PAGE_CACHE = [{"stale": True}]
+            brain.remove_course_material(saved["name"])
+            self.assertEqual(brain.list_course_materials(), [second])
             self.assertIsNone(brain.PDF_PAGE_CACHE)
             with self.assertRaises(ValueError):
                 brain.add_course_material("../secret.pdf", b"%PDF-1.4")
             with self.assertRaises(ValueError):
                 brain.add_course_material("notes.txt", b"notes")
+            with self.assertRaises(FileNotFoundError):
+                brain.remove_course_material("missing.pdf")
+
+    def test_professor_multi_pdf_dropzone_is_wired(self) -> None:
+        page = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="material-dropzone"', page)
+        self.assertIn('type="file" accept="application/pdf,.pdf" multiple', page)
+        self.assertIn('materialDropzone.addEventListener("drop"', page)
+        self.assertIn("selectedMaterialFiles", page)
+        self.assertIn("for (const [index, file] of files.entries())", page)
+        self.assertIn('id="cancel-material"', page)
+        self.assertIn('method: "DELETE"', page)
+
+    def test_trusted_sites_render_as_regular_links(self) -> None:
+        page = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('document.createElement("a")', page)
+        self.assertIn('domain.href = "https://" + site', page)
+        self.assertIn('domain.rel = "noopener noreferrer"', page)
+        self.assertIn(".site-link {", page)
+        self.assertNotIn('document.createElement("code")', page)
 
     def test_professor_can_add_and_delete_trusted_sites(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(

@@ -29,6 +29,7 @@ from brain import (
     get_trusted_domains,
     list_course_materials,
     next_review_prompt,
+    remove_course_material,
     remove_trusted_domain,
     require_env,
     reset_conversation,
@@ -426,6 +427,19 @@ async def upload_material(request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "material": material}
+
+
+@app.delete("/api/materials")
+async def delete_material(request: Request) -> dict:
+    """Delete one professor-uploaded PDF."""
+    filename = request.query_params.get("filename", "")
+    try:
+        remove_course_material(filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="course material not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @app.get("/api/trusted-sites")

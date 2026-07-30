@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -86,7 +87,7 @@ class FakeClient:
 
 class MossMemoryStoreTests(unittest.TestCase):
     def test_embed_deduplicate_recall_and_push(self):
-        async def scenario():
+        async def scenario(local_path):
             session = FakeSession()
             clients = []
 
@@ -108,6 +109,7 @@ class MossMemoryStoreTests(unittest.TestCase):
                 model_id="moss-minilm",
                 student_id="student-1",
                 sync_debounce_seconds=0,
+                local_path=local_path,
                 sdk_loader=lambda: sdk,
             )
 
@@ -151,8 +153,55 @@ class MossMemoryStoreTests(unittest.TestCase):
                 {"$eq": "student-1"},
             )
             self.assertEqual(session.push_count, 1)
+            self.assertEqual(
+                json.loads(local_path.read_text(encoding="utf-8"))[0]["concept"],
+                "Self-Attention",
+            )
 
-        asyncio.run(scenario())
+        with tempfile.TemporaryDirectory() as directory:
+            asyncio.run(scenario(Path(directory) / "weak-concepts.json"))
+
+    def test_quota_uses_local_memory_without_retrying_moss(self):
+        async def scenario(local_path):
+            calls = 0
+
+            class QuotaClient:
+                def __init__(self, _project_id, _project_key):
+                    pass
+
+                async def session(self, **_kwargs):
+                    nonlocal calls
+                    calls += 1
+                    raise RuntimeError("Moss usage limit exceeded")
+
+            store = MossMemoryStore(
+                "project-1",
+                "key-1",
+                student_id="student-1",
+                local_path=local_path,
+                sdk_loader=lambda: SimpleNamespace(MossClient=QuotaClient),
+            )
+
+            await store.initialize()
+            saved = await store.save(
+                "AI 개론",
+                "Self-Attention",
+                "Query와 Key를 왜 곱하나요?",
+                "attention 유사도의 의미가 불명확함",
+            )
+            recalled = await store.recall("attention 유사도")
+            reviewed = await store.review(saved["memory_id"], True)
+
+            self.assertTrue(store.is_local_mode)
+            self.assertEqual(calls, 1)
+            self.assertEqual(saved["storage"], "local")
+            self.assertEqual(recalled["storage"], "local")
+            self.assertEqual(recalled["memories"][0]["concept"], "Self-Attention")
+            self.assertEqual(reviewed["storage"], "local")
+            self.assertTrue(local_path.exists())
+
+        with tempfile.TemporaryDirectory() as directory:
+            asyncio.run(scenario(Path(directory) / "weak-concepts.json"))
 
     def test_missing_credentials_fail_before_sdk_load(self):
         async def scenario():

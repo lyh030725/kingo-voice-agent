@@ -93,6 +93,20 @@ def add_course_material(filename: str, content: bytes) -> dict:
     return {"name": path.name, "size": len(content)}
 
 
+def remove_course_material(filename: str) -> None:
+    """Delete one uploaded PDF and invalidate the search cache."""
+    global PDF_PAGE_CACHE
+    if not filename or filename != Path(filename).name or any(char in filename for char in ("\\", "\0")):
+        raise ValueError("invalid filename")
+    if Path(filename).suffix.casefold() != ".pdf":
+        raise ValueError("only PDF course materials are supported")
+    path = COURSE_SRCS_DIR / filename
+    if not path.is_file():
+        raise FileNotFoundError(filename)
+    path.unlink()
+    PDF_PAGE_CACHE = None
+
+
 def _trusted_domain(value: str) -> str:
     """Normalize a URL or hostname to a trusted domain.
 
@@ -234,6 +248,10 @@ HISTORY: list[dict] = []
 SYSTEM_PROMPT = (
     "You are KINGO VOICE TA, a Socratic voice teaching assistant for one "
     "Sungkyunkwan University student. Speak in Korean unless asked otherwise. "
+    "Use natural spoken Korean in the polite 해요 style, as if talking with the "
+    "student face to face. Prefer endings such as 해요, 예요, 볼까요, and 해볼게요. "
+    "Avoid written declarative endings such as 한다, 이다, and 하였다, and avoid "
+    "textbook or report-like prose unless you are quoting a source. "
     "Use one to three short conversational sentences with no markdown lists. "
     "At the start of every student turn, call recall_weak_concepts and "
     "search_course_materials together. Base factual claims only on tool results. "
