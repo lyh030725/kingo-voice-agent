@@ -16,6 +16,22 @@ import server
 
 
 class MvpTests(unittest.TestCase):
+    def test_course_agent_symbol_states_are_wired(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        component = (root / "static" / "course-agent-symbol.js").read_text(encoding="utf-8")
+        page = (root / "static" / "index.html").read_text(encoding="utf-8")
+
+        for state in ("presence", "resonance", "flow", "bloom", "sustain", "error"):
+            self.assertIn(f'"{state}"', component)
+        self.assertIn("prefers-reduced-motion: reduce", component)
+        self.assertIn("animation: none !important", component)
+        self.assertIn('id="course-agent-petal-gradient"', component)
+        self.assertIn('customElements.define("course-agent-symbol"', component)
+        self.assertIn('setSymbolState(message, "sustain"), 500', page)
+        self.assertIn('setSymbolState(message, "flow"), 300', page)
+        self.assertIn('state="presence" size="32"', page)
+        self.assertIn('state="presence" size="16"', page)
+
     def test_professor_can_upload_pdf_and_refresh_search_cache(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(
             brain, "COURSE_SRCS_DIR", Path(directory)

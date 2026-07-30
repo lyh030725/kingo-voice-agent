@@ -32,26 +32,26 @@ uv run uvicorn server:app --port 8000
 
 ## 에이전트 도구
 
-| 도구 | 역할 |
-|---|---|
-| `recall_weak_concepts` | 현재 질문과 관련된 학습자의 취약 개념 회상 |
-| `search_course_materials` | 교수자가 업로드한 PDF에서 근거 검색 |
-| `search_trusted_web` | PDF 근거가 부족할 때 허용 도메인만 검색 |
-| `save_weak_concept` | 명시적 혼란이나 오답을 취약 개념으로 저장 |
-| `review_weak_concept` | 복습 답변 결과에 따라 숙달 상태 갱신 |
+| 도구                      | 역할                                       |
+| ------------------------- | ------------------------------------------ |
+| `recall_weak_concepts`    | 현재 질문과 관련된 학습자의 취약 개념 회상 |
+| `search_course_materials` | 교수자가 업로드한 PDF에서 근거 검색        |
+| `search_trusted_web`      | PDF 근거가 부족할 때 허용 도메인만 검색    |
+| `save_weak_concept`       | 명시적 혼란이나 오답을 취약 개념으로 저장  |
+| `review_weak_concept`     | 복습 답변 결과에 따라 숙달 상태 갱신       |
 
 텍스트와 음성 요청은 같은 brain과 tool dispatcher를 사용합니다. 모든 turn은 기억 회상과 강의자료 검색을 먼저 수행합니다.
 
 ## API
 
-| Method | Path | 설명 |
-|---|---|---|
-| `POST` | `/answer-text` | 텍스트 질문과 답변 모드 전달; reply·tools·sources 반환 |
-| `WS` | `/stream` | 16kHz PCM 음성·모드 송수신 |
-| `GET/POST` | `/api/materials` | 강의자료 조회·PDF 업로드 |
-| `GET/POST/DELETE` | `/api/trusted-sites` | 신뢰 도메인 조회·추가·삭제 |
-| `GET` | `/review` | 복습할 취약 개념 조회 |
-| `POST` | `/reset` | 현재 대화 이력 초기화 |
+| Method            | Path                 | 설명                                                   |
+| ----------------- | -------------------- | ------------------------------------------------------ |
+| `POST`            | `/answer-text`       | 텍스트 질문과 답변 모드 전달; reply·tools·sources 반환 |
+| `WS`              | `/stream`            | 16kHz PCM 음성·모드 송수신                             |
+| `GET/POST`        | `/api/materials`     | 강의자료 조회·PDF 업로드                               |
+| `GET/POST/DELETE` | `/api/trusted-sites` | 신뢰 도메인 조회·추가·삭제                             |
+| `GET`             | `/review`            | 복습할 취약 개념 조회                                  |
+| `POST`            | `/reset`             | 현재 대화 이력 초기화                                  |
 
 텍스트 요청 예시:
 

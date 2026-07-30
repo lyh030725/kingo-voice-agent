@@ -6,6 +6,11 @@
 <title>시계열데이터처리개론 | i-Campus</title>
 <style>
 :root {
+  --course-agent-deep-green: #0a3d34;
+  --course-agent-primary-green: #00664f;
+  --course-agent-green: #1e7a5e;
+  --course-agent-light-green: #8ad26a;
+  --course-agent-highlight: #d6e85a;
   --skku: #0b4f8a;
   --skku-dark: #102d4d;
   --skku-deep: #09233d;
@@ -125,6 +130,7 @@ button { cursor: pointer; }
   gap: 8px;
 }
 .course-menu svg { width: 16px; height: 16px; flex: 0 0 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.course-menu course-agent-symbol { flex: 0 0 16px; }
 .course-menu button:hover { background: #e7edf3; color: var(--skku); }
 .course-menu button.active {
   color: var(--skku);
@@ -172,6 +178,7 @@ button { cursor: pointer; }
 }
 .card-head h2 { margin: 0; font-size: 16px; font-weight: 600; color: #2c4057; }
 .card-head small { color: var(--muted); }
+.agent-title { display: flex; align-items: center; gap: 9px; }
 .card-body { padding: 19px; }
 .teacher-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr); gap: 20px; }
 .setting-intro { margin: 0 0 17px; color: var(--muted); }
@@ -232,6 +239,7 @@ button { cursor: pointer; }
 .message { display: flex; gap: 10px; margin-bottom: 18px; }
 .message.user { flex-direction: row-reverse; }
 .avatar { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 50%; display: grid; place-items: center; background: var(--skku); color: white; font-size: 12px; font-weight: 700; }
+.message.assistant .avatar { background: transparent; }
 .message.user .avatar { background: #7b8795; }
 .bubble-wrap { max-width: min(78%, 650px); }
 .who { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
@@ -324,7 +332,7 @@ button { cursor: pointer; }
         <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4M16 2v4M21 14V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8M3 10h18M16 20l2 2 4-4"/></svg>출결현황</button>
         <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21v-6M12 21V9M19 21V3"/></svg>학습 활동 현황</button>
         <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 10l-9-5-9 5 9 5zM6 12.5V16c0 2 3 3 6 3s6-1 6-3v-3.5M22 10v6"/></svg>성적</button>
-        <button class="active" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>KINGO VOICE TA</button>
+        <button class="active" type="button"><course-agent-symbol state="presence" size="16" aria-hidden="true"></course-agent-symbol>KINGO VOICE TA</button>
       </nav>
     </aside>
 
@@ -345,7 +353,7 @@ button { cursor: pointer; }
 
         <div class="chat-layout">
           <section class="card chat-card" aria-label="AI 조교 채팅">
-            <div class="card-head"><h2>시계열데이터처리개론 AI 조교</h2><small class="online">● 이용 가능</small></div>
+            <div class="card-head"><div class="agent-title"><course-agent-symbol state="presence" size="32" aria-hidden="true"></course-agent-symbol><h2>시계열데이터처리개론 AI 조교</h2></div><small class="online">● 이용 가능</small></div>
             <div class="chat-toolbar"><span id="current-mode-label">소크라테스 모드</span><button id="new-chat" class="secondary" type="button">새 대화</button></div>
             <div id="messages" class="messages" aria-live="polite"></div>
             <form id="chat-form" class="chat-form">
@@ -409,6 +417,7 @@ button { cursor: pointer; }
   </div>
 </div>
 
+<script src="course-agent-symbol.js"></script>
 <script>
 const byId = (id) => document.getElementById(id);
 let activeRole = "student";
@@ -449,12 +458,22 @@ document.querySelectorAll(".mode").forEach((button) => {
   });
 });
 
-function addMessage(role, text, tools, timings, sources) {
+function addMessage(role, text, tools, timings, sources, symbolState = "sustain") {
   const row = document.createElement("div");
   row.className = "message " + role;
   const avatar = document.createElement("div");
   avatar.className = "avatar";
-  avatar.textContent = role === "user" ? "나" : "TA";
+  let symbol = null;
+  if (role === "user") {
+    avatar.textContent = "나";
+  } else {
+    symbol = document.createElement("course-agent-symbol");
+    symbol.setAttribute("state", symbolState);
+    symbol.setAttribute("size", "34");
+    symbol.setAttribute("animated", "");
+    symbol.setAttribute("aria-label", "Course Agent " + symbolState);
+    avatar.appendChild(symbol);
+  }
   const wrap = document.createElement("div");
   wrap.className = "bubble-wrap";
   const who = document.createElement("div");
@@ -509,11 +528,34 @@ function addMessage(role, text, tools, timings, sources) {
   row.append(avatar, wrap);
   byId("messages").appendChild(row);
   byId("messages").scrollTop = byId("messages").scrollHeight;
+  return { row, bubble, symbol };
+}
+
+function setSymbolState(message, next) {
+  if (!message || !message.symbol) return;
+  message.symbol.setAttribute("state", next);
+  message.symbol.setAttribute("aria-label", "Course Agent " + next);
+}
+
+function startAssistantResponse() {
+  const message = addMessage("assistant", "답변을 준비하고 있습니다.", null, null, null, "resonance");
+  const timer = setTimeout(() => setSymbolState(message, "flow"), 300);
+  return { message, timer };
+}
+
+function finishAssistantResponse(pending, text, tools, timings, sources, state = "bloom") {
+  clearTimeout(pending.timer);
+  pending.message.row.remove();
+  const message = addMessage("assistant", text, tools, timings, sources, state);
+  if (state === "bloom") {
+    setTimeout(() => setSymbolState(message, "sustain"), 500);
+  }
+  return message;
 }
 
 function resetMessages() {
   byId("messages").replaceChildren();
-  addMessage("assistant", "안녕하세요. 시계열데이터처리개론 KINGO VOICE TA입니다. 강의 내용 중 막힌 부분을 텍스트나 음성으로 질문해 주세요.");
+  addMessage("assistant", "안녕하세요. 시계열데이터처리개론 KINGO VOICE TA입니다. 강의 내용 중 막힌 부분을 텍스트나 음성으로 질문해 주세요.", null, null, null, "presence");
 }
 resetMessages();
 
@@ -523,6 +565,7 @@ byId("chat-form").addEventListener("submit", async (event) => {
   const text = input.value.trim();
   if (!text) return;
   addMessage("user", text);
+  const pending = startAssistantResponse();
   input.value = "";
   input.disabled = true;
   try {
@@ -533,9 +576,9 @@ byId("chat-form").addEventListener("submit", async (event) => {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || "답변을 생성하지 못했습니다.");
-    addMessage("assistant", data.reply, data.tools, data.timings, data.sources);
+    finishAssistantResponse(pending, data.reply, data.tools, data.timings, data.sources);
   } catch (error) {
-    addMessage("assistant", "오류: " + error.message);
+    finishAssistantResponse(pending, "오류: " + error.message, null, null, null, "error");
   } finally {
     input.disabled = false;
     input.focus();
@@ -755,30 +798,34 @@ function handleSocket(message) {
     if (message.speaking) setVoiceState("hearing", "말씀 듣는 중");
     else setVoiceState("listening", "듣는 중");
   } else if (message.type === "turn") {
-    pendingVoice = {};
+    pendingVoice = {
+      user: addMessage("user", "음성 질문을 인식했습니다."),
+      ...startAssistantResponse(),
+    };
     setVoiceState("thinking", "답변 준비 중");
   } else if (message.type === "transcript") {
-    if (pendingVoice) pendingVoice.transcript = message.text;
+    if (pendingVoice) pendingVoice.user.bubble.textContent = message.text;
   } else if (message.type === "audio_start") {
+    if (pendingVoice) setSymbolState(pendingVoice.message, "flow");
     setVoiceState("speaking", "답변 중");
     startPlayback();
   } else if (message.type === "audio_chunk") {
     enqueueChunk(fromBase64(message.data));
   } else if (message.type === "audio_end") {
     if (pendingVoice) {
-      pendingVoice.reply = message.reply;
-      pendingVoice.tools = message.tools;
-      pendingVoice.sources = message.sources;
-      pendingVoice.timings = message.timings;
-      addMessage("user", pendingVoice.transcript || "(음성 질문)");
-      addMessage("assistant", pendingVoice.reply, pendingVoice.tools, pendingVoice.timings, pendingVoice.sources);
+      finishAssistantResponse(pendingVoice, message.reply, message.tools, message.timings, message.sources);
       pendingVoice = null;
     }
     finishPlayback();
   } else if (message.type === "listening") {
     setVoiceState("listening", "듣는 중");
   } else if (message.type === "error") {
-    addMessage("assistant", "오류: " + message.message);
+    if (pendingVoice) {
+      finishAssistantResponse(pendingVoice, "오류: " + message.message, null, null, null, "error");
+      pendingVoice = null;
+    } else {
+      addMessage("assistant", "오류: " + message.message, null, null, null, "error");
+    }
     setVoiceState("listening", "듣는 중");
   }
 }
