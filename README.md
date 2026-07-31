@@ -60,7 +60,7 @@ uv run uvicorn server:app --port 8000
 ```bash
 curl http://localhost:8000/answer-text \
   -H 'Content-Type: application/json' \
-  -d '{"text":"정상성과 차분의 관계를 설명해줘", "mode":"explain"}'
+  -d '{"text":"Softmax 연산이 뭐야?", "mode":"explain"}'
 ```
 
 ## 음성 처리 흐름

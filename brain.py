@@ -238,10 +238,6 @@ class WeakConceptCapture(BaseModel):
 
 
 
-class AgentDecision(BaseModel):
-    answer: str
-
-
 HISTORY: list[dict] = []
 # ponytail: one in-process student session; split by authenticated user when auth lands.
 
@@ -252,6 +248,12 @@ SYSTEM_PROMPT = (
     "student face to face. Prefer endings such as 해요, 예요, 볼까요, and 해볼게요. "
     "Avoid written declarative endings such as 한다, 이다, and 하였다, and avoid "
     "textbook or report-like prose unless you are quoting a source. "
+    "Every formula, variable, Greek letter, subscript, and summation MUST be "
+    "enclosed in LaTeX delimiters: $...$ inline or $$...$$ on its own line. "
+    "Use LaTeX commands such as \\frac, \\exp, \\sum, and subscripts; never "
+    "write math as plain text or Unicode notation, even if earlier messages do. "
+    "For example, write $\\alpha_{t,k}=\\frac{\\exp(s_{t,k})}{\\sum_j "
+    "\\exp(s_{t,j})}$, never αt,k = exp(st,k) / Σj exp(st,j). "
     "Use one to three short conversational sentences with no markdown lists. "
     "At the start of every student turn, call recall_weak_concepts and "
     "search_course_materials together. Base factual claims only on tool results. "
@@ -753,7 +755,7 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
         response = client.chat.completions.create(
             model=os.environ.get("CHAT_MODEL", "grok-4.3"),
             reasoning_effort=os.environ.get("CHAT_REASONING_EFFORT", "none"),
-            max_completion_tokens=int(os.environ.get("CHAT_MAX_TOKENS", "500")),
+            max_completion_tokens=int(os.environ.get("CHAT_MAX_TOKENS", "1200")),
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "system", "content": MODE_PROMPTS.get(mode, MODE_PROMPTS["socratic"])},
@@ -763,14 +765,6 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
             tools=TOOLS,
             tool_choice=tool_choice,
             parallel_tool_calls=True,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "kingo_agent_reply",
-                    "strict": True,
-                    "schema": AgentDecision.model_json_schema(),
-                },
-            },
         )
         return response.choices[0].message
 
@@ -802,8 +796,7 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
         log.info("stage grok  %5d ms", elapsed_ms)
 
         if not msg.tool_calls:
-            decision = AgentDecision.model_validate_json(msg.content or "")
-            reply_text = decision.answer.strip() or "답변을 생성하지 못했어요. 다시 질문해 주세요."
+            reply_text = (msg.content or "").strip() or "답변을 생성하지 못했어요. 다시 질문해 주세요."
             if external_sources:
                 reply_text = _for_speech(reply_text)
 

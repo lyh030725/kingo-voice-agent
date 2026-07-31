@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>시계열데이터처리개론 | i-Campus</title>
+<script>
+window.MathJax = { tex: { inlineMath: [["$", "$"]], displayMath: [["$$", "$$"]] } };
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"></script>
 <style>
 :root {
   --course-agent-deep-green: #0a3d34;
@@ -554,6 +558,9 @@ function addMessage(role, text, tools, timings, sources, symbolState = "sustain"
   }
   row.append(avatar, wrap);
   byId("messages").appendChild(row);
+  if (role === "assistant" && window.MathJax.typesetPromise) {
+    window.MathJax.typesetPromise([bubble]).catch(console.error);
+  }
   byId("messages").scrollTop = byId("messages").scrollHeight;
   return { row, bubble, symbol };
 }

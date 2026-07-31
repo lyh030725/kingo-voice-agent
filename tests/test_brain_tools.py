@@ -58,7 +58,7 @@ class FakeClient:
                 }),
             ]),
             SimpleNamespace(
-                content=json.dumps({"answer": "근거를 바탕으로 설명할게요. https://arxiv.org/abs/1706.03762"}, ensure_ascii=False),
+                content="근거를 바탕으로 설명할게요. https://arxiv.org/abs/1706.03762",
                 tool_calls=[],
             ),
         ])
@@ -136,6 +136,8 @@ class BrainToolTests(unittest.TestCase):
             "review_weak_concept",
         })
         self.assertEqual(fake_client.calls[0]["tool_choice"], "required")
+        self.assertEqual(fake_client.calls[0]["max_completion_tokens"], 1200)
+        self.assertNotIn("response_format", fake_client.calls[0])
         self.assertEqual(fake_client.calls[1]["tool_choice"], "auto")
         self.assertTrue(fake_client.calls[0]["parallel_tool_calls"])
         self.assertEqual(

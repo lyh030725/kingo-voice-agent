@@ -20,6 +20,9 @@ class MvpTests(unittest.TestCase):
         self.assertIn("polite 해요 style", brain.SYSTEM_PROMPT)
         self.assertIn("Avoid written declarative endings", brain.SYSTEM_PROMPT)
         self.assertIn("textbook or report-like prose", brain.SYSTEM_PROMPT)
+        self.assertIn("MUST be enclosed in LaTeX delimiters", brain.SYSTEM_PROMPT)
+        self.assertIn(r"$\alpha_{t,k}=\frac{\exp(s_{t,k})}{\sum_j", brain.SYSTEM_PROMPT)
+        self.assertIn("never αt,k = exp(st,k) / Σj exp(st,j)", brain.SYSTEM_PROMPT)
 
     def test_server_lifespan_survives_moss_quota(self) -> None:
         class QuotaClient:
@@ -109,6 +112,14 @@ class MvpTests(unittest.TestCase):
         self.assertIn('domain.rel = "noopener noreferrer"', page)
         self.assertIn(".site-link {", page)
         self.assertNotIn('document.createElement("code")', page)
+
+    def test_assistant_math_is_typeset(self) -> None:
+        page = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("mathjax@3.2.2/es5/tex-chtml.js", page)
+        self.assertIn('inlineMath: [["$", "$"]]', page)
+        self.assertIn('role === "assistant" && window.MathJax.typesetPromise', page)
+        self.assertIn("window.MathJax.typesetPromise([bubble])", page)
 
     def test_professor_can_add_and_delete_trusted_sites(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(
