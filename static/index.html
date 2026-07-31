@@ -223,6 +223,7 @@ button { cursor: pointer; }
 .file-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-size { color: var(--muted); font-size: 12px; }
 .file-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.selected-material-list:empty { display: none; }
 .site-form { display: flex; gap: 8px; }
 .site-form input, .chat-form input {
   min-width: 0;
@@ -414,9 +415,10 @@ button { cursor: pointer; }
                 <span class="upload-hint">또는 클릭해서 여러 파일을 선택하세요 (파일당 최대 25MB)</span>
                 <span id="material-selection" class="upload-selection">선택된 파일 없음</span>
               </label>
+              <ul id="selected-material-list" class="list selected-material-list"></ul>
               <div class="upload-actions">
                 <button id="upload-material" class="primary" type="button" disabled>선택한 자료 업로드</button>
-                <button id="cancel-material" class="secondary" type="button" disabled>선택 취소</button>
+                <button id="cancel-material" class="secondary" type="button" disabled>전체 선택 취소</button>
               </div>
               <div id="upload-feedback" class="feedback" role="status"></div>
               <ul id="material-list" class="list"></ul>
@@ -692,13 +694,44 @@ const materialDropzone = byId("material-dropzone");
 const uploadMaterialButton = byId("upload-material");
 const cancelMaterialButton = byId("cancel-material");
 
+function renderMaterialSelection() {
+  const list = byId("selected-material-list");
+  list.replaceChildren();
+  selectedMaterialFiles.forEach((file, index) => {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "file-name";
+    name.textContent = file.name;
+    const remove = document.createElement("button");
+    remove.className = "danger";
+    remove.type = "button";
+    remove.textContent = "선택 취소";
+    remove.setAttribute("aria-label", file.name + " 선택 취소");
+    remove.addEventListener("click", () => removeSelectedMaterial(index));
+    item.append(name, remove);
+    list.appendChild(item);
+  });
+  byId("material-selection").textContent = selectedMaterialFiles.length
+    ? selectedMaterialFiles.length + "개 파일 선택됨"
+    : "선택된 파일 없음";
+  uploadMaterialButton.textContent = selectedMaterialFiles.length > 1
+    ? selectedMaterialFiles.length + "개 자료 업로드"
+    : "선택한 자료 업로드";
+  uploadMaterialButton.disabled = !selectedMaterialFiles.length;
+  cancelMaterialButton.disabled = !selectedMaterialFiles.length;
+}
+
+function removeSelectedMaterial(index) {
+  selectedMaterialFiles.splice(index, 1);
+  materialInput.value = "";
+  renderMaterialSelection();
+  byId("upload-feedback").textContent = "파일 선택을 취소했습니다.";
+}
+
 function clearMaterialSelection() {
   selectedMaterialFiles = [];
   materialInput.value = "";
-  byId("material-selection").textContent = "선택된 파일 없음";
-  uploadMaterialButton.textContent = "선택한 자료 업로드";
-  uploadMaterialButton.disabled = true;
-  cancelMaterialButton.disabled = true;
+  renderMaterialSelection();
 }
 
 function setMaterialFiles(fileList) {
@@ -711,10 +744,7 @@ function setMaterialFiles(fileList) {
     return;
   }
   selectedMaterialFiles = files;
-  byId("material-selection").textContent = files.length ? files.length + "개 파일 선택됨" : "선택된 파일 없음";
-  uploadMaterialButton.textContent = files.length > 1 ? files.length + "개 자료 업로드" : "선택한 자료 업로드";
-  uploadMaterialButton.disabled = !files.length;
-  cancelMaterialButton.disabled = !files.length;
+  renderMaterialSelection();
   feedback.textContent = "";
 }
 

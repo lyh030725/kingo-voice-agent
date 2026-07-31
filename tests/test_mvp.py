@@ -96,6 +96,9 @@ class MvpTests(unittest.TestCase):
         self.assertIn("selectedMaterialFiles", page)
         self.assertIn("for (const [index, file] of files.entries())", page)
         self.assertIn('id="cancel-material"', page)
+        self.assertIn('id="selected-material-list"', page)
+        self.assertIn("removeSelectedMaterial(index)", page)
+        self.assertIn('remove.textContent = "선택 취소"', page)
         self.assertIn('method: "DELETE"', page)
 
     def test_trusted_sites_render_as_regular_links(self) -> None:
