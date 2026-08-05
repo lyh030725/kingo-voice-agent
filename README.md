@@ -11,10 +11,11 @@
 - 교수자 PDF 강의자료 업로드
 - 교수자 신뢰 사이트 추가·삭제
 - 학습자 텍스트 채팅과 핸즈프리 음성 대화
+- 수식·단계 도식·좌표 그래프 visualization 카드
 - 설명·소크라테스 답변 모드
 - 강의자료 PDF RAG와 파일명·페이지 출처
 - Moss 기반 취약 개념 저장·회상·간격 복습
-- 5개 function tool 공통 dispatcher
+- 6개 function tool 공통 dispatcher
 
 ## 빠른 시작
 
@@ -28,7 +29,7 @@ cp .env.example .env
 uv run uvicorn server:app --port 8000
 ```
 
-`.env`에 `XAI_API_KEY`, `TTS_VOICE`, `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`를 입력하고 Chrome 또는 Edge에서 <http://localhost:8000>에 접속합니다.
+`.env`에 `XAI_API_KEY`, `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`를 입력하고 Chrome 또는 Edge에서 <http://localhost:8000>에 접속합니다. 음성 모델은 최신 별칭인 `grok-voice-latest`, 기본 voice는 `eve`입니다.
 
 취약 개념은 Moss와 함께 `memory/weak-concepts.json`에도 저장됩니다. Moss 사용 한도 오류가 발생하면 서버는 중단되지 않고 해당 프로세스 동안 로컬 파일에서 저장·회상·복습을 계속합니다.
 
@@ -41,10 +42,14 @@ uv run uvicorn server:app --port 8000
 | `search_trusted_web`      | PDF 근거가 부족할 때 허용 도메인만 검색    |
 | `save_weak_concept`       | 명시적 혼란이나 오답을 취약 개념으로 저장  |
 | `review_weak_concept`     | 복습 답변 결과에 따라 숙달 상태 갱신       |
+| `show_visualization`      | 수식·흐름·그래프를 채팅 참고자료로 표시    |
 
 텍스트와 음성 요청은 같은 brain과 tool dispatcher를 사용합니다. 모든 turn은 기억 회상과 강의자료 검색을 먼저 수행합니다.
+수학식이나 도식이 설명에 필요하면 TA는 내용을 그대로 읽지 않고 visualization tool을 호출한 뒤 “제가 보여드린 그림처럼”이라고 참조해 설명합니다.
 
 ## API
+
+`POST /answer-text/stream`은 `application/x-ndjson`으로 `token` 이벤트를 즉시 보내고 마지막에 `done` 이벤트로 tools, sources, visualizations, timings를 전달합니다. 기존 `/answer-text` JSON API도 유지됩니다.
 
 | Method            | Path                 | 설명                                                   |
 | ----------------- | -------------------- | ------------------------------------------------------ |
@@ -66,11 +71,13 @@ curl http://localhost:8000/answer-text \
 ## 음성 처리 흐름
 
 ```text
-AudioWorklet → WebSocket → WebRTC VAD → xAI STT
-→ PDF/Moss/Web tools → xAI streaming TTS → MediaSource
+AudioWorklet → WebSocket → xAI Grok Voice Agent (server VAD + tools)
+→ 24kHz PCM → Web Audio 예약 재생
 ```
 
-브라우저는 20ms 단위의 16kHz PCM을 전송합니다. 서버는 발화 시작 debounce, 300ms prefix padding, 900ms silence endpointing을 적용하고 250ms 미만 소음은 API 호출 전에 버립니다.
+브라우저는 마이크를 계속 연 상태로 20ms 단위의 16kHz PCM을 전송합니다. 사용자가 응답 도중 말하면 xAI의 `speech_started` 이벤트가 생성 중인 응답을 취소하고 브라우저의 예약된 PCM을 즉시 비웁니다. 스피커 음성이 마이크로 재입력되지 않도록 헤드폰 사용을 권장합니다.
+
+구조와 barge-in 흐름은 [voice-ai-course Week 4 Duplex](https://github.com/civiliangame/voice-ai-course/blob/main/week4.md)의 기본 template를 따릅니다.
 
 ## 개발
 

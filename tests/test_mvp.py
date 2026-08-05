@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -17,12 +18,22 @@ import server
 
 class MvpTests(unittest.TestCase):
     def test_system_prompt_prefers_spoken_korean(self) -> None:
+        for heading in (
+            "# Role and objective",
+            "# Language and speaking style",
+            "# Tool workflow",
+            "# Evidence and sources",
+            "# Learning memory",
+            "# Visual references",
+            "# Response format",
+        ):
+            self.assertIn(heading, brain.SYSTEM_PROMPT)
         self.assertIn("polite 해요 style", brain.SYSTEM_PROMPT)
         self.assertIn("Avoid written declarative endings", brain.SYSTEM_PROMPT)
         self.assertIn("textbook or report-like prose", brain.SYSTEM_PROMPT)
-        self.assertIn("MUST be enclosed in LaTeX delimiters", brain.SYSTEM_PROMPT)
-        self.assertIn(r"$\alpha_{t,k}=\frac{\exp(s_{t,k})}{\sum_j", brain.SYSTEM_PROMPT)
-        self.assertIn("never αt,k = exp(st,k) / Σj exp(st,j)", brain.SYSTEM_PROMPT)
+        self.assertIn("Never put raw equations", brain.SYSTEM_PROMPT)
+        self.assertIn("show_visualization first", brain.SYSTEM_PROMPT)
+        self.assertIn("제가 보여드린 그림처럼", brain.SYSTEM_PROMPT)
 
     def test_server_lifespan_survives_moss_quota(self) -> None:
         class QuotaClient:
@@ -113,13 +124,14 @@ class MvpTests(unittest.TestCase):
         self.assertIn(".site-link {", page)
         self.assertNotIn('document.createElement("code")', page)
 
-    def test_assistant_math_is_typeset(self) -> None:
+    def test_visualizations_are_rendered_without_raw_html(self) -> None:
         page = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
 
         self.assertIn("mathjax@3.2.2/es5/tex-chtml.js", page)
-        self.assertIn('inlineMath: [["$", "$"]]', page)
-        self.assertIn('role === "assistant" && window.MathJax.typesetPromise', page)
-        self.assertIn("window.MathJax.typesetPromise([bubble])", page)
+        self.assertIn("function addVisualization(visualization)", page)
+        self.assertIn("function buildPlot(visualization, points)", page)
+        self.assertIn('message.type === "visualization"', page)
+        self.assertIn('formula.textContent = "\\\\[" + visualization.latex + "\\\\]"', page)
 
     def test_professor_can_add_and_delete_trusted_sites(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(
@@ -132,7 +144,7 @@ class MvpTests(unittest.TestCase):
                 brain.add_trusted_domain("not-a-domain")
 
     def test_text_chat_forwards_selected_mode(self) -> None:
-        mocked = AsyncMock(return_value=("풀이", ["search_course_materials"], ["https://example.com/lesson"]))
+        mocked = AsyncMock(return_value=("풀이", ["search_course_materials"], ["https://example.com/lesson"], []))
         with patch.object(server, "think", mocked):
             result = asyncio.run(
                 server.answer_text(brain.TextQuestion(text="ARIMA를 풀어줘", mode="explain"))
@@ -140,8 +152,29 @@ class MvpTests(unittest.TestCase):
 
         self.assertEqual(result["reply"], "풀이")
         self.assertEqual(result["sources"], ["https://example.com/lesson"])
+        self.assertEqual(result["visualizations"], [])
         self.assertEqual(mocked.await_args.args[2], "explain")
         self.assertEqual(server.VALID_MODES, {"explain", "socratic"})
+
+
+    def test_text_chat_streams_tokens_before_done(self) -> None:
+        async def fake_think(_text, _timer, _mode, on_token=None):
+            await on_token("첫 ")
+            await on_token("토큰")
+            return "첫 토큰", [], [], []
+
+        async def scenario():
+            with patch.object(server, "think", fake_think):
+                response = await server.answer_text_stream(
+                    brain.TextQuestion(text="질문", mode="explain")
+                )
+                body = "".join([chunk async for chunk in response.body_iterator])
+            return [json.loads(line) for line in body.splitlines()]
+
+        events = asyncio.run(scenario())
+
+        self.assertEqual([event["type"] for event in events], ["token", "token", "done"])
+        self.assertEqual([event["text"] for event in events[:2]], ["첫 ", "토큰"])
 
 
 if __name__ == "__main__":

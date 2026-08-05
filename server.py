@@ -6,6 +6,7 @@ import asyncio
 import base64
 import binascii
 import io
+import json
 import logging
 import os
 import time
@@ -17,6 +18,7 @@ from pathlib import Path
 import requests
 import webrtcvad
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -36,6 +38,18 @@ from brain import (
     shutdown,
     startup,
     think,
+)
+from transport import (
+    AgentAudio,
+    AgentTextDelta,
+    AgentTurnDone,
+    Failed,
+    SessionReady,
+    ToolCalled,
+    Transcript,
+    Transport,
+    UserStartedSpeaking,
+    UserStoppedSpeaking,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -223,7 +237,7 @@ def tts_stream(text: str):
         json={
             "text": _for_speech(text),
             "voice_id": require_env("TTS_VOICE"),
-            "language": "auto",
+            "language": "ko",
         },
         stream=True,
     )
@@ -260,7 +274,7 @@ async def respond(ws: WebSocket, utterance: bytes, mode: str = "socratic") -> bo
         log.info("heard: %r", transcript)
         await ws.send_json({"type": "transcript", "text": transcript})
 
-        reply, tools_used, sources = await think(transcript, StageTimer(), mode)
+        reply, tools_used, sources, visualizations = await think(transcript, StageTimer(), mode)
         timings["llm"] = ms() - timings["stt"]
         log.info("reply: %r (tools: %s)", reply, tools_used or "none")
 
@@ -285,6 +299,7 @@ async def respond(ws: WebSocket, utterance: bytes, mode: str = "socratic") -> bo
             "reply": reply,
             "tools": tools_used,
             "sources": sources,
+            "visualizations": visualizations,
             "timings": timings,
         })
         return True
@@ -296,61 +311,106 @@ async def respond(ws: WebSocket, utterance: bytes, mode: str = "socratic") -> bo
 
 @app.websocket("/stream")
 async def stream(ws: WebSocket) -> None:
-    """Serve one bidirectional audio session.
-
-    Args:
-        ws: Client WebSocket carrying JSON audio envelopes.
-
-    Returns:
-        None when client disconnects.
-    """
     await ws.accept()
-    log.info("stream connected")
-    detector = TurnDetector()
-    responding = False
-    mode = "socratic"
-
+    mode = ws.query_params.get("mode", "socratic")
+    if mode not in VALID_MODES:
+        mode = "socratic"
+    transport = make_transport(mode)
+    reader = asyncio.create_task(pump_provider_events(ws, transport))
     try:
-        while True:
-            msg = await ws.receive_json()
-            if not isinstance(msg, dict):
-                continue
-
-            if msg.get("type") == "mode":
-                requested_mode = msg.get("mode")
-                if requested_mode in VALID_MODES:
-                    mode = requested_mode
-                continue
-
-            if msg.get("type") == "audio":
-                if responding:
-                    continue
-                try:
-                    frame = base64.b64decode(msg.get("data", ""), validate=True)
-                except (binascii.Error, TypeError, ValueError):
-                    continue
-                if len(frame) != FRAME_BYTES:
-                    continue
-
-                was_speaking = detector.speaking
-                utterance = detector.feed(frame)
-                if detector.speaking != was_speaking:
-                    await ws.send_json({"type": "vad", "speaking": detector.speaking})
-
-                if utterance is not None:
-                    responding = True
-                    ok = await respond(ws, utterance, mode)
-                    if not ok:
-                        responding = False
-                        await ws.send_json({"type": "listening"})
-
-            elif msg.get("type") == "playback_done":
-                responding = False
-                detector.reset()
-                await ws.send_json({"type": "listening"})
-
+        await transport.start()
+        await ws.send_json({"type": "ready", "provider": transport.name})
+        await pump_caller_audio(ws, transport)
     except WebSocketDisconnect:
         log.info("stream closed")
+    except Exception as exc:
+        log.exception("realtime voice failed")
+        await try_send(ws, {"type": "error", "message": str(exc)})
+    finally:
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+        await transport.close()
+
+
+def make_transport(mode: str) -> Transport:
+    """Create the Week 4 Grok realtime transport."""
+    from grok_live import GrokTransport
+
+    return GrokTransport(mode)
+
+
+async def pump_caller_audio(ws: WebSocket, transport: Transport) -> None:
+    """Relay validated 20 ms PCM frames while the mic stays open."""
+    while True:
+        msg = await ws.receive_json()
+        if not isinstance(msg, dict) or msg.get("type") != "audio":
+            continue
+        try:
+            frame = base64.b64decode(msg.get("data", ""), validate=True)
+        except (binascii.Error, TypeError, ValueError):
+            continue
+        if len(frame) == FRAME_BYTES:
+            await transport.send_audio(frame)
+
+
+async def pump_provider_events(ws: WebSocket, transport: Transport) -> None:
+    """Translate provider-neutral realtime events for the existing browser."""
+    speaking = False
+    turn_ended_at: float | None = None
+    try:
+        async for event in transport.events():
+            match event:
+                case SessionReady():
+                    log.info("realtime session configured")
+                case UserStartedSpeaking():
+                    await ws.send_json({"type": "state", "value": "hearing"})
+                    if speaking:
+                        speaking = False
+                        await ws.send_json({"type": "flush"})
+                case UserStoppedSpeaking():
+                    turn_ended_at = time.perf_counter()
+                    await ws.send_json({"type": "state", "value": "thinking"})
+                case AgentAudio(pcm=pcm, rate=rate):
+                    if not speaking:
+                        speaking = True
+                        await ws.send_json({"type": "state", "value": "speaking"})
+                        if turn_ended_at is not None:
+                            await ws.send_json({
+                                "type": "latency",
+                                "ms": round((time.perf_counter() - turn_ended_at) * 1000),
+                            })
+                            turn_ended_at = None
+                    await ws.send_json({
+                        "type": "audio",
+                        "data": base64.b64encode(pcm).decode(),
+                        "rate": rate,
+                    })
+                case AgentTextDelta(text=text) if text:
+                    await ws.send_json({"type": "token", "text": text})
+                case AgentTurnDone():
+                    speaking = False
+                    await ws.send_json({"type": "state", "value": "listening"})
+                case Transcript(who=who, text=text) if text:
+                    await ws.send_json({"type": "transcript", "who": who, "text": text})
+                case ToolCalled(name=name, result=result):
+                    await ws.send_json({"type": "tool", "name": name})
+                    if name == "show_visualization" and isinstance(result, dict):
+                        await ws.send_json({"type": "visualization", "visualization": result})
+                case Failed(message=message):
+                    await ws.send_json({"type": "error", "message": message})
+                    return
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.exception("provider event pump failed")
+        await try_send(ws, {"type": "error", "message": str(exc)})
+
+
+async def try_send(ws: WebSocket, payload: dict) -> None:
+    try:
+        await ws.send_json(payload)
+    except Exception:
+        pass
 
 
 @app.post("/answer-text")
@@ -369,11 +429,66 @@ async def answer_text(question: TextQuestion) -> dict:
     timer = StageTimer()
     try:
         with timer.stage("total"):
-            reply, tools_used, sources = await think(transcript, timer, question.mode)
+            reply, tools_used, sources, visualizations = await think(transcript, timer, question.mode)
     except Exception as exc:
         log.exception("text answer failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return {"transcript": transcript, "reply": reply, "tools": tools_used, "sources": sources, "timings": timer.timings_ms}
+    return {
+        "transcript": transcript,
+        "reply": reply,
+        "tools": tools_used,
+        "sources": sources,
+        "visualizations": visualizations,
+        "timings": timer.timings_ms,
+    }
+
+
+@app.post("/answer-text/stream")
+async def answer_text_stream(question: TextQuestion) -> StreamingResponse:
+    """Stream model text deltas followed by one result event."""
+    transcript = question.text.strip()
+    if not transcript:
+        raise HTTPException(status_code=422, detail="text must not be blank")
+
+    async def events():
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        timer = StageTimer()
+
+        async def on_token(token: str) -> None:
+            await queue.put({"type": "token", "text": token})
+
+        async def generate() -> None:
+            try:
+                with timer.stage("total"):
+                    reply, tools_used, sources, visualizations = await think(
+                        transcript, timer, question.mode, on_token=on_token
+                    )
+                await queue.put({
+                    "type": "done",
+                    "transcript": transcript,
+                    "reply": reply,
+                    "tools": tools_used,
+                    "sources": sources,
+                    "visualizations": visualizations,
+                    "timings": timer.timings_ms,
+                })
+            except Exception as exc:
+                log.exception("streaming text answer failed")
+                await queue.put({"type": "error", "message": str(exc)})
+
+        task = asyncio.create_task(generate())
+        try:
+            while True:
+                event = await queue.get()
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+                if event["type"] in {"done", "error"}:
+                    break
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 @app.post("/reset")

@@ -56,6 +56,16 @@ class FakeClient:
                     "memory_id": "M-test",
                     "correct": True,
                 }),
+                ToolCall("visual", "show_visualization", {
+                    "title": "Attention 가중치",
+                    "kind": "formula",
+                    "caption": "유사도 점수를 비율로 바꿔요.",
+                    "latex": r"\\alpha_i=\\frac{e^{s_i}}{\\sum_j e^{s_j}}",
+                    "labels": [],
+                    "points": [],
+                    "x_label": "",
+                    "y_label": "",
+                }),
             ]),
             SimpleNamespace(
                 content="근거를 바탕으로 설명할게요. https://arxiv.org/abs/1706.03762",
@@ -114,7 +124,7 @@ class BrainToolTests(unittest.TestCase):
                 new=AsyncMock(return_value=json.dumps({"status": "practicing"})),
             ) as review,
         ):
-            reply, tools, sources = asyncio.run(
+            reply, tools, sources, visualizations = asyncio.run(
                 brain.think("Query와 Key를 왜 곱해?", brain.StageTimer())
             )
 
@@ -126,6 +136,7 @@ class BrainToolTests(unittest.TestCase):
                 "search_trusted_web",
                 "save_weak_concept",
                 "review_weak_concept",
+                "show_visualization",
             },
         )
         self.assertEqual(set(tools), {
@@ -134,6 +145,7 @@ class BrainToolTests(unittest.TestCase):
             "search_trusted_web",
             "save_weak_concept",
             "review_weak_concept",
+            "show_visualization",
         })
         self.assertEqual(fake_client.calls[0]["tool_choice"], "required")
         self.assertEqual(fake_client.calls[0]["max_completion_tokens"], 1200)
@@ -142,7 +154,7 @@ class BrainToolTests(unittest.TestCase):
         self.assertTrue(fake_client.calls[0]["parallel_tool_calls"])
         self.assertEqual(
             sum(message["role"] == "tool" for message in fake_client.calls[2]["messages"]),
-            5,
+            6,
         )
         recall.assert_awaited_once_with(topic="attention")
         course_search.assert_called_once_with(query="attention")
@@ -155,6 +167,58 @@ class BrainToolTests(unittest.TestCase):
         review.assert_awaited_once_with(memory_id="M-test", correct=True)
         self.assertNotIn("https://arxiv.org/abs/1706.03762", reply)
         self.assertEqual(sources, ["https://arxiv.org/abs/1706.03762"])
+        self.assertEqual(visualizations[0]["kind"], "formula")
+        self.assertEqual(visualizations[0]["title"], "Attention 가중치")
+
+    def test_stream_completion_emits_each_text_delta(self) -> None:
+        chunks = iter([
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="첫 ", tool_calls=[]))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="토큰", tool_calls=[]))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=None, tool_calls=[
+                SimpleNamespace(
+                    index=0,
+                    id="call-1",
+                    function=SimpleNamespace(name="show_", arguments='{"x":'),
+                ),
+            ]))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=None, tool_calls=[
+                SimpleNamespace(
+                    index=0,
+                    id=None,
+                    function=SimpleNamespace(name="visualization", arguments="1}"),
+                ),
+            ]))]),
+        ])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+            create=lambda **_kwargs: chunks,
+        )))
+        received = []
+
+        async def scenario():
+            async def on_token(token: str) -> None:
+                received.append(token)
+
+            return await brain._stream_completion(client, {}, on_token)
+
+        message = asyncio.run(scenario())
+
+        self.assertEqual(received, ["첫 ", "토큰"])
+        self.assertEqual(message.content, "첫 토큰")
+        self.assertEqual(message.tool_calls[0].function.name, "show_visualization")
+        self.assertEqual(message.tool_calls[0].function.arguments, '{"x":1}')
+
+    def test_visualization_rejects_incomplete_shapes(self) -> None:
+        with self.assertRaises(ValueError):
+            brain.show_visualization(
+                title="빈 그래프",
+                kind="plot",
+                caption="점이 부족해요.",
+                latex="",
+                labels=[],
+                points=[{"x": 0, "y": 0}],
+                x_label="x",
+                y_label="y",
+            )
 
     def test_tool_docstrings_describe_contracts(self) -> None:
         for target in (
@@ -163,6 +227,7 @@ class BrainToolTests(unittest.TestCase):
             brain.search_course_materials,
             brain.search_trusted_web,
             brain.review_weak_concept,
+            brain.show_visualization,
             brain.run_tool,
         ):
             doc = target.__doc__ or ""

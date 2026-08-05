@@ -16,11 +16,12 @@ import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Awaitable, Callable, Literal
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageFunctionToolCall
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
@@ -236,36 +237,67 @@ class WeakConceptCapture(BaseModel):
     difficulty_note: str
 
 
+class PlotPoint(BaseModel):
+    x: float = Field(ge=-1e12, le=1e12)
+    y: float = Field(ge=-1e12, le=1e12)
+
+
+class Visualization(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    kind: Literal["formula", "flow", "plot"]
+    caption: str = Field(min_length=1, max_length=300)
+    latex: str = Field(max_length=1000)
+    labels: list[str] = Field(max_length=8)
+    points: list[PlotPoint] = Field(max_length=40)
+    x_label: str = Field(max_length=40)
+    y_label: str = Field(max_length=40)
+
+
 
 
 HISTORY: list[dict] = []
 # ponytail: one in-process student session; split by authenticated user when auth lands.
 
-SYSTEM_PROMPT = (
-    "You are KINGO VOICE TA, a Socratic voice teaching assistant for one "
-    "Sungkyunkwan University student. Speak in Korean unless asked otherwise. "
-    "Use natural spoken Korean in the polite 해요 style, as if talking with the "
-    "student face to face. Prefer endings such as 해요, 예요, 볼까요, and 해볼게요. "
-    "Avoid written declarative endings such as 한다, 이다, and 하였다, and avoid "
-    "textbook or report-like prose unless you are quoting a source. "
-    "Every formula, variable, Greek letter, subscript, and summation MUST be "
-    "enclosed in LaTeX delimiters: $...$ inline or $$...$$ on its own line. "
-    "Use LaTeX commands such as \\frac, \\exp, \\sum, and subscripts; never "
-    "write math as plain text or Unicode notation, even if earlier messages do. "
-    "For example, write $\\alpha_{t,k}=\\frac{\\exp(s_{t,k})}{\\sum_j "
-    "\\exp(s_{t,j})}$, never αt,k = exp(st,k) / Σj exp(st,j). "
-    "Use one to three short conversational sentences with no markdown lists. "
-    "At the start of every student turn, call recall_weak_concepts and "
-    "search_course_materials together. Base factual claims only on tool results. "
-    "For PDF evidence, state filename and page. If PDF evidence is missing or "
-    "insufficient, call search_trusted_web. Return source URLs through the separate sources field; do not repeat raw URLs in the conversational answer. "
-    "Use recalled weaknesses to personalize hints and check prerequisites. "
-    "Call save_weak_concept only for explicit confusion, an incorrect answer, "
-    "or an incomplete explanation; ordinary questions are not weaknesses. "
-    "When the student answers a review prompt containing a memory id, call "
+SYSTEM_PROMPT = """
+# Role and objective
+You are KINGO VOICE TA, a Socratic voice teaching assistant for one
+Sungkyunkwan University student.
 
-    "review_weak_concept with your correctness judgment. Never read raw JSON aloud."
-)
+# Language and speaking style
+Speak in Korean unless asked otherwise. Use natural spoken Korean in the
+polite 해요 style, as if talking with the student face to face. Prefer endings
+such as 해요, 예요, 볼까요, and 해볼게요. Avoid written declarative endings such
+as 한다, 이다, and 하였다, and avoid textbook or report-like prose unless you are
+quoting a source.
+
+# Tool workflow
+At the start of every student turn, call recall_weak_concepts and
+search_course_materials together.
+
+# Evidence and sources
+Base factual claims only on tool results. For PDF evidence, state filename and
+page. If PDF evidence is missing or insufficient, call search_trusted_web.
+Return source URLs through the separate sources field; do not repeat raw URLs
+in the conversational answer.
+
+# Learning memory
+Use recalled weaknesses to personalize hints and check prerequisites. Call
+save_weak_concept only for explicit confusion, an incorrect answer, or an
+incomplete explanation; ordinary questions are not weaknesses. When the
+student answers a review prompt containing a memory id, call
+review_weak_concept with your correctness judgment.
+
+# Visual references
+Never put raw equations, symbolic notation, diagrams, or coordinate data in
+the conversational answer and never read them symbol by symbol. When the
+answer would otherwise contain a formula, process diagram, or graph, you MUST
+call show_visualization first and put the exact visual data only in that tool.
+Then explain it naturally with a reference such as '제가 보여드린 그림처럼'.
+
+# Response format
+Use one to three short conversational sentences with no markdown lists. Never
+read raw JSON aloud.
+""".strip()
 
 MODE_PROMPTS = {
     "explain": (
@@ -415,6 +447,43 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "show_visualization",
+            "description": (
+                "Show a safe visual reference instead of putting formulas, diagrams, "
+                "or graph coordinates in the spoken answer. Call this whenever the "
+                "answer would otherwise contain one. Use formula for LaTeX, "
+                "flow for ordered labeled steps, or plot for numeric x/y points."
+            ),
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short Korean title."},
+                    "kind": {"type": "string", "enum": ["formula", "flow", "plot"]},
+                    "caption": {"type": "string", "description": "One concise Korean takeaway."},
+                    "latex": {"type": "string", "description": "Raw LaTeX without dollar delimiters; empty unless kind is formula."},
+                    "labels": {"type": "array", "items": {"type": "string"}, "description": "Ordered node labels; empty unless kind is flow."},
+                    "points": {
+                        "type": "array",
+                        "description": "Numeric points; empty unless kind is plot.",
+                        "items": {
+                            "type": "object",
+                            "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+                            "required": ["x", "y"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "x_label": {"type": "string", "description": "Plot x-axis label, otherwise empty."},
+                    "y_label": {"type": "string", "description": "Plot y-axis label, otherwise empty."},
+                },
+                "required": ["title", "kind", "caption", "latex", "labels", "points", "x_label", "y_label"],
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 # Retrieval and persistence helpers.
 
@@ -424,6 +493,25 @@ TOOLS = [
 
 def _json(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False)
+
+
+def show_visualization(**args) -> str:
+    """Validate one formula, flow diagram, or numeric plot for the chat UI.
+
+    Args:
+        **args: Structured visualization fields from the model tool call.
+
+    Returns:
+        JSON string containing only validated, render-safe data.
+    """
+    visualization = Visualization(**args)
+    if visualization.kind == "formula" and not visualization.latex.strip():
+        raise ValueError("formula visualization requires latex")
+    if visualization.kind == "flow" and len(visualization.labels) < 2:
+        raise ValueError("flow visualization requires at least two labels")
+    if visualization.kind == "plot" and len(visualization.points) < 2:
+        raise ValueError("plot visualization requires at least two points")
+    return _json(visualization.model_dump())
 
 
 async def save_weak_concept(
@@ -667,6 +755,7 @@ async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
         "search_trusted_web": "web",
         "save_weak_concept": "save",
         "review_weak_concept": "review",
+        "show_visualization": "visual",
     }.get(name, "tool")
     try:
         if name == "recall_weak_concepts":
@@ -683,6 +772,8 @@ async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
             return await save_weak_concept(**args)
         if name == "review_weak_concept":
             return await review_weak_concept(**args)
+        if name == "show_visualization":
+            return show_visualization(**args)
         return _json({"error": f"unknown tool: {name}"})
     except (TypeError, ValueError) as exc:
         return _json({"error": f"invalid {name} arguments: {exc}"})
@@ -724,8 +815,54 @@ def _append_history(message: dict) -> None:
         del HISTORY[:-MAX_HISTORY_MESSAGES]
 
 
+async def _stream_completion(client, request: dict, on_token: Callable[[str], Awaitable[None]]):
+    """Stream text deltas while reconstructing any function calls."""
+    stream = await asyncio.to_thread(client.chat.completions.create, **request, stream=True)
+    content: list[str] = []
+    calls: dict[int, dict] = {}
+    sentinel = object()
+    try:
+        while (chunk := await asyncio.to_thread(next, stream, sentinel)) is not sentinel:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                content.append(delta.content)
+                await on_token(delta.content)
+            for part in delta.tool_calls or []:
+                call = calls.setdefault(part.index, {"id": "", "name": "", "arguments": ""})
+                if part.id:
+                    call["id"] = part.id
+                if part.function:
+                    call["name"] += part.function.name or ""
+                    call["arguments"] += part.function.arguments or ""
+    finally:
+        close = getattr(stream, "close", None)
+        if close:
+            await asyncio.to_thread(close)
 
-async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> tuple[str, list[str], list[str]]:
+    tool_calls = [
+        ChatCompletionMessageFunctionToolCall(
+            id=call["id"],
+            type="function",
+            function={"name": call["name"], "arguments": call["arguments"]},
+        )
+        for _, call in sorted(calls.items())
+    ]
+    return ChatCompletionMessage(
+        role="assistant",
+        content="".join(content) or None,
+        tool_calls=tool_calls or None,
+    )
+
+
+
+async def think(
+    transcript: str,
+    timer: StageTimer,
+    mode: str = "socratic",
+    on_token: Callable[[str], Awaitable[None]] | None = None,
+) -> tuple[str, list[str], list[str], list[dict]]:
     """Generate one grounded Socratic response through function tools.
 
     Args:
@@ -734,14 +871,31 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
         mode: Learner-selected explanation or Socratic mode.
 
     Returns:
-        Tuple containing clean reply text, tool names, and trusted source URLs.
+        Reply text, tool names, trusted source URLs, and visual references.
     """
     _append_history({"role": "user", "content": transcript})
     client = xai_client()
     tool_messages: list[dict] = []
     tools_used: list[str] = []
     external_sources: list[str] = []
+    visualizations: list[dict] = []
     required_context = {"recall_weak_concepts", "search_course_materials"}
+
+    def completion_request(tool_choice: str) -> dict:
+        return {
+            "model": os.environ.get("CHAT_MODEL", "grok-4.3"),
+            "reasoning_effort": os.environ.get("CHAT_REASONING_EFFORT", "none"),
+            "max_completion_tokens": int(os.environ.get("CHAT_MAX_TOKENS", "1200")),
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": MODE_PROMPTS.get(mode, MODE_PROMPTS["socratic"])},
+                *HISTORY,
+                *tool_messages,
+            ],
+            "tools": TOOLS,
+            "tool_choice": tool_choice,
+            "parallel_tool_calls": True,
+        }
 
     def complete(tool_choice: str):
         """Call Grok with tool schemas and accumulated tool results.
@@ -752,20 +906,7 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
         Returns:
             OpenAI-compatible assistant message.
         """
-        response = client.chat.completions.create(
-            model=os.environ.get("CHAT_MODEL", "grok-4.3"),
-            reasoning_effort=os.environ.get("CHAT_REASONING_EFFORT", "none"),
-            max_completion_tokens=int(os.environ.get("CHAT_MAX_TOKENS", "1200")),
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "system", "content": MODE_PROMPTS.get(mode, MODE_PROMPTS["socratic"])},
-                *HISTORY,
-                *tool_messages,
-            ],
-            tools=TOOLS,
-            tool_choice=tool_choice,
-            parallel_tool_calls=True,
-        )
+        response = client.chat.completions.create(**completion_request(tool_choice))
         return response.choices[0].message
 
     async def execute(call) -> tuple[str, str]:
@@ -790,7 +931,10 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
     for _ in range(MAX_TOOL_ROUNDS):
         tool_choice = "auto" if required_context.issubset(tools_used) else "required"
         started_at = time.perf_counter()
-        msg = await asyncio.to_thread(complete, tool_choice)
+        if on_token:
+            msg = await _stream_completion(client, completion_request(tool_choice), on_token)
+        else:
+            msg = await asyncio.to_thread(complete, tool_choice)
         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
         timer.timings_ms["grok"] = timer.timings_ms.get("grok", 0) + elapsed_ms
         log.info("stage grok  %5d ms", elapsed_ms)
@@ -806,7 +950,7 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
                 tools_used.append("save_weak_concept")
 
             _append_history({"role": "assistant", "content": reply_text})
-            return reply_text, tools_used, external_sources[:3]
+            return reply_text, tools_used, external_sources[:3], visualizations
 
         tool_messages.append({
             "role": "assistant",
@@ -822,6 +966,13 @@ async def think(transcript: str, timer: StageTimer, mode: str = "socratic") -> t
                     external_sources = json.loads(result).get("sources", [])
                 except json.JSONDecodeError:
                     external_sources = []
+            elif name == "show_visualization":
+                try:
+                    visual = json.loads(result)
+                    if "error" not in visual:
+                        visualizations.append(visual)
+                except json.JSONDecodeError:
+                    pass
             tool_messages.append({
                 "role": "tool",
                 "tool_call_id": call.id,

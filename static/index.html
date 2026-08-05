@@ -271,6 +271,18 @@ button { cursor: pointer; }
 .message.user .bubble { background: #eaf3fa; border-color: #c9dce9; border-radius: 12px 4px 12px 12px; }
 .tool-row { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
 .tool-chip { border-radius: 10px; background: #eaf5e5; color: #4d7535; padding: 2px 7px; font-size: 10px; }
+.visualization-bubble { width: min(100%, 620px); padding: 16px; }
+.visualization-title { margin: 0 0 12px; color: #263b50; font-size: 14px; }
+.visualization-caption { margin: 12px 0 0; color: #617184; font-size: 12px; }
+.visualization-formula { overflow-x: auto; padding: 12px 4px; text-align: center; font-size: 18px; }
+.visualization-flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.visualization-node { flex: 1 1 110px; min-width: 0; padding: 10px; border: 1px solid #b8cddd; border-radius: 8px; background: #f3f8fb; text-align: center; }
+.visualization-arrow { color: #607f98; font-weight: 700; }
+.visualization-plot { display: block; width: 100%; height: auto; }
+.visualization-axis { stroke: #7f91a2; stroke-width: 1.5; }
+.visualization-line { fill: none; stroke: #1768a5; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.visualization-point { fill: #1768a5; }
+.visualization-label { fill: #617184; font-size: 12px; }
 .source-list { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e4e9ee; display: grid; gap: 5px; }
 .source-title { color: #6b7989; font-size: 11px; font-weight: 700; }
 .source-link { display: block; max-width: 100%; color: #1768a5; font-size: 12px; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -312,6 +324,8 @@ button { cursor: pointer; }
   .user-name { display: none; }
   .mode-grid { grid-template-columns: 1fr; }
   .page-heading { align-items: flex-start; flex-direction: column; }
+  .visualization-flow { flex-direction: column; align-items: stretch; }
+  .visualization-arrow { align-self: center; transform: rotate(90deg); }
 }
 </style>
 </head>
@@ -457,7 +471,6 @@ let audioContext = null;
 let micStream = null;
 let state = "idle";
 let muted = false;
-let pendingVoice = null;
 let selectedMaterialFiles = [];
 
 function setRole(role) {
@@ -550,10 +563,12 @@ function addMessage(role, text, tools, timings, sources, symbolState = "sustain"
     });
     if (validSources) wrap.appendChild(sourceList);
   }
-  if (timings && timings.total !== undefined) {
+  if (timings && (timings.total !== undefined || timings.first_audio !== undefined)) {
     const timing = document.createElement("div");
     timing.className = "timing";
-    timing.textContent = "응답 " + timings.total + "ms";
+    timing.textContent = timings.first_audio !== undefined
+      ? "첫 음성 " + timings.first_audio + "ms"
+      : "응답 " + timings.total + "ms";
     wrap.appendChild(timing);
   }
   row.append(avatar, wrap);
@@ -563,6 +578,94 @@ function addMessage(role, text, tools, timings, sources, symbolState = "sustain"
   }
   byId("messages").scrollTop = byId("messages").scrollHeight;
   return { row, bubble, symbol };
+}
+
+function addVisualization(visualization) {
+  if (!visualization || !["formula", "flow", "plot"].includes(visualization.kind)) return;
+  const message = addMessage("assistant", "");
+  const bubble = message.bubble;
+  bubble.classList.add("visualization-bubble");
+  bubble.replaceChildren();
+
+  const title = document.createElement("h3");
+  title.className = "visualization-title";
+  title.textContent = visualization.title;
+  bubble.appendChild(title);
+
+  if (visualization.kind === "formula") {
+    const formula = document.createElement("div");
+    formula.className = "visualization-formula";
+    formula.textContent = "\\[" + visualization.latex + "\\]";
+    bubble.appendChild(formula);
+    if (window.MathJax.typesetPromise) window.MathJax.typesetPromise([formula]).catch(console.error);
+  } else if (visualization.kind === "flow") {
+    const flow = document.createElement("div");
+    flow.className = "visualization-flow";
+    visualization.labels.forEach((label, index) => {
+      const node = document.createElement("div");
+      node.className = "visualization-node";
+      node.textContent = label;
+      flow.appendChild(node);
+      if (index < visualization.labels.length - 1) {
+        const arrow = document.createElement("span");
+        arrow.className = "visualization-arrow";
+        arrow.setAttribute("aria-hidden", "true");
+        arrow.textContent = "→";
+        flow.appendChild(arrow);
+      }
+    });
+    bubble.appendChild(flow);
+  } else {
+    const points = visualization.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+    if (points.length >= 2) bubble.appendChild(buildPlot(visualization, points));
+  }
+
+  const caption = document.createElement("p");
+  caption.className = "visualization-caption";
+  caption.textContent = visualization.caption;
+  bubble.appendChild(caption);
+  byId("messages").scrollTop = byId("messages").scrollHeight;
+}
+
+function buildPlot(visualization, points) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.classList.add("visualization-plot");
+  svg.setAttribute("viewBox", "0 0 640 320");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", visualization.title + ": " + visualization.caption);
+
+  let xMin = Math.min(...points.map((point) => point.x));
+  let xMax = Math.max(...points.map((point) => point.x));
+  let yMin = Math.min(...points.map((point) => point.y));
+  let yMax = Math.max(...points.map((point) => point.y));
+  if (xMin === xMax) { xMin -= 1; xMax += 1; }
+  if (yMin === yMax) { yMin -= 1; yMax += 1; }
+  const left = 64, right = 616, top = 20, bottom = 274;
+  const sx = (x) => left + (x - xMin) / (xMax - xMin) * (right - left);
+  const sy = (y) => bottom - (y - yMin) / (yMax - yMin) * (bottom - top);
+  const element = (name, attrs, className) => {
+    const node = document.createElementNS(ns, name);
+    Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value));
+    if (className) node.classList.add(className);
+    svg.appendChild(node);
+    return node;
+  };
+
+  element("line", { x1: left, y1: bottom, x2: right, y2: bottom }, "visualization-axis");
+  element("line", { x1: left, y1: top, x2: left, y2: bottom }, "visualization-axis");
+  element("path", { d: points.map((point, index) => (index ? "L" : "M") + sx(point.x) + " " + sy(point.y)).join(" ") }, "visualization-line");
+  points.forEach((point) => element("circle", { cx: sx(point.x), cy: sy(point.y), r: 4 }, "visualization-point"));
+
+  const xLabel = element("text", { x: (left + right) / 2, y: 310, "text-anchor": "middle" }, "visualization-label");
+  xLabel.textContent = visualization.x_label;
+  const yLabel = element("text", { x: 16, y: (top + bottom) / 2, transform: "rotate(-90 16 " + ((top + bottom) / 2) + ")", "text-anchor": "middle" }, "visualization-label");
+  yLabel.textContent = visualization.y_label;
+  [[left, 292, "start", xMin], [right, 292, "end", xMax], [52, bottom, "end", yMin], [52, top + 4, "end", yMax]].forEach(([x, y, anchor, value]) => {
+    const tick = element("text", { x, y, "text-anchor": anchor }, "visualization-label");
+    tick.textContent = Number(value.toPrecision(4)).toString();
+  });
+  return svg;
 }
 
 function setSymbolState(message, next) {
@@ -593,6 +696,42 @@ function resetMessages() {
 }
 resetMessages();
 
+async function readStreamingAnswer(response, pending) {
+  if (!response.ok) return response.json();
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+  let started = false;
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (!line) continue;
+      const event = JSON.parse(line);
+      if (event.type === "token") {
+        if (!started) {
+          clearTimeout(pending.timer);
+          pending.message.bubble.textContent = "";
+          setSymbolState(pending.message, "flow");
+          started = true;
+        }
+        pending.message.bubble.append(event.text);
+        byId("messages").scrollTop = byId("messages").scrollHeight;
+      } else if (event.type === "done") {
+        result = event;
+      } else if (event.type === "error") {
+        throw new Error(event.message);
+      }
+    }
+    if (done) break;
+  }
+  if (!result) throw new Error("Streaming response ended unexpectedly");
+  return result;
+}
+
 byId("chat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = byId("chat-input");
@@ -603,14 +742,15 @@ byId("chat-form").addEventListener("submit", async (event) => {
   input.value = "";
   input.disabled = true;
   try {
-    const response = await fetch("/answer-text", {
+    const response = await fetch("/answer-text/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: text, mode: learningMode }),
     });
-    const data = await response.json();
+    const data = await readStreamingAnswer(response, pending);
     if (!response.ok) throw new Error(data.detail || "답변을 생성하지 못했습니다.");
     finishAssistantResponse(pending, data.reply, data.tools, data.timings, data.sources);
+    (data.visualizations || []).forEach(addVisualization);
   } catch (error) {
     finishAssistantResponse(pending, "오류: " + error.message, null, null, null, "error");
   } finally {
@@ -906,7 +1046,7 @@ async function startVoice() {
     const capture = new AudioWorkletNode(audioContext, "pcm-capture");
     source.connect(capture);
     capture.port.onmessage = (event) => sendSamples(event.data);
-    byId("player").play().catch(() => {});
+    initPlayback();
     connectSocket();
     byId("voice-orb").disabled = true;
     byId("mute").classList.remove("hidden");
@@ -920,14 +1060,13 @@ byId("voice-orb").addEventListener("click", startVoice);
 
 function connectSocket() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(protocol + "://" + location.host + "/stream");
-  ws.onopen = () => ws.send(JSON.stringify({ type: "mode", mode: learningMode }));
+  ws = new WebSocket(protocol + "://" + location.host + "/stream?mode=" + encodeURIComponent(learningMode));
   ws.onclose = () => setVoiceState("idle", "연결 종료");
   ws.onmessage = (event) => handleSocket(JSON.parse(event.data));
 }
 
 function sendSamples(block) {
-  if (muted || activeRole !== "student" || state === "speaking") return;
+  if (muted || activeRole !== "student") return;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const joined = new Float32Array(pcmBuffer.length + block.length);
   joined.set(pcmBuffer);
@@ -946,100 +1085,78 @@ function sendSamples(block) {
 }
 
 function handleSocket(message) {
-  if (message.type === "vad") {
-    if (message.speaking) setVoiceState("hearing", "말씀 듣는 중");
-    else setVoiceState("listening", "듣는 중");
-  } else if (message.type === "turn") {
-    pendingVoice = {
-      user: addMessage("user", "음성 질문을 인식했습니다."),
-      ...startAssistantResponse(),
-    };
-    setVoiceState("thinking", "답변 준비 중");
+  if (message.type === "ready") {
+    setVoiceState("listening", "듣는 중");
+  } else if (message.type === "state") {
+    const labels = { hearing: "말씀 듣는 중", thinking: "응답 준비 중", speaking: "응답 중", listening: "듣는 중" };
+    setVoiceState(message.value, labels[message.value] || message.value);
+  } else if (message.type === "flush") {
+    flushPlayback();
+  } else if (message.type === "token") {
+    if (!voicePending) voicePending = addMessage("assistant", "", null, null, null, "flow");
+    voicePending.bubble.append(message.text);
+    byId("messages").scrollTop = byId("messages").scrollHeight;
   } else if (message.type === "transcript") {
-    if (pendingVoice) pendingVoice.user.bubble.textContent = message.text;
-  } else if (message.type === "audio_start") {
-    if (pendingVoice) setSymbolState(pendingVoice.message, "flow");
-    setVoiceState("speaking", "답변 중");
-    startPlayback();
-  } else if (message.type === "audio_chunk") {
-    enqueueChunk(fromBase64(message.data));
-  } else if (message.type === "audio_end") {
-    if (pendingVoice) {
-      finishAssistantResponse(pendingVoice, message.reply, message.tools, message.timings, message.sources);
-      pendingVoice = null;
-    }
-    finishPlayback();
-  } else if (message.type === "listening") {
-    setVoiceState("listening", "듣는 중");
-  } else if (message.type === "error") {
-    if (pendingVoice) {
-      finishAssistantResponse(pendingVoice, "오류: " + message.message, null, null, null, "error");
-      pendingVoice = null;
+    if (message.who === "user") {
+      addMessage("user", message.text);
     } else {
-      addMessage("assistant", "오류: " + message.message, null, null, null, "error");
+      if (voicePending) voicePending.row.remove();
+      addMessage("assistant", message.text, voiceTools, voiceLatency === undefined ? null : { first_audio: voiceLatency });
+      voicePending = null;
+      voiceTools = [];
+      voiceLatency = undefined;
     }
+  } else if (message.type === "tool") {
+    voiceTools.push(message.name);
+  } else if (message.type === "visualization") {
+    addVisualization(message.visualization);
+  } else if (message.type === "latency") {
+    voiceLatency = message.ms;
+  } else if (message.type === "audio") {
+    playChunk(fromBase64(message.data), message.rate || 24000);
+  } else if (message.type === "error") {
+    addMessage("assistant", "오류: " + message.message, null, null, null, "error");
     setVoiceState("listening", "듣는 중");
   }
 }
 
-const useMediaSource = "MediaSource" in window && MediaSource.isTypeSupported("audio/mpeg");
-let mediaSource = null;
-let sourceBuffer = null;
-let chunkQueue = [];
-let streamEnded = false;
-let blobChunks = [];
+let playContext = null;
+let nextPlayAt = 0;
+let voiceTools = [];
+let voiceLatency;
+let voicePending = null;
+const activeSources = new Set();
 
-function startPlayback() {
-  const player = byId("player");
-  player.onended = playbackDone;
-  player.onerror = playbackDone;
-  if (!useMediaSource) {
-    blobChunks = [];
-    return;
-  }
-  chunkQueue = [];
-  streamEnded = false;
-  sourceBuffer = null;
-  mediaSource = new MediaSource();
-  player.src = URL.createObjectURL(mediaSource);
-  mediaSource.addEventListener("sourceopen", () => {
-    sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
-    sourceBuffer.addEventListener("updateend", pump);
-    pump();
-  }, { once: true });
-  player.play().catch(() => {});
+function initPlayback() {
+  playContext = new AudioContext();
+  playContext.resume().catch(() => {});
+  nextPlayAt = 0;
 }
 
-function enqueueChunk(bytes) {
-  if (useMediaSource) {
-    chunkQueue.push(bytes);
-    pump();
-  } else {
-    blobChunks.push(bytes);
-  }
+function playChunk(bytes, rate) {
+  if (!playContext || bytes.byteLength < 2) return;
+  const usable = bytes.byteLength - (bytes.byteLength % 2);
+  const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, usable / 2);
+  const buffer = playContext.createBuffer(1, pcm.length, rate);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
+
+  const source = playContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(playContext.destination);
+  const startAt = Math.max(playContext.currentTime + 0.03, nextPlayAt);
+  source.start(startAt);
+  nextPlayAt = startAt + buffer.duration;
+  activeSources.add(source);
+  source.onended = () => activeSources.delete(source);
 }
 
-function pump() {
-  if (!sourceBuffer || sourceBuffer.updating) return;
-  if (chunkQueue.length) sourceBuffer.appendBuffer(chunkQueue.shift());
-  else if (streamEnded && mediaSource.readyState === "open") mediaSource.endOfStream();
-}
-
-function finishPlayback() {
-  if (useMediaSource) {
-    streamEnded = true;
-    pump();
-  } else {
-    const player = byId("player");
-    player.src = URL.createObjectURL(new Blob(blobChunks, { type: "audio/mpeg" }));
-    player.play().catch(() => {});
+function flushPlayback() {
+  for (const source of activeSources) {
+    try { source.stop(); } catch (_) {}
   }
-}
-
-function playbackDone() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "playback_done" }));
-  }
+  activeSources.clear();
+  nextPlayAt = 0;
 }
 
 byId("mute").addEventListener("click", () => {
@@ -1049,12 +1166,15 @@ byId("mute").addEventListener("click", () => {
 });
 
 byId("stop-voice").addEventListener("click", () => {
+  flushPlayback();
   if (ws) ws.close();
   if (micStream) micStream.getTracks().forEach((track) => track.stop());
   if (audioContext) audioContext.close();
+  if (playContext) playContext.close();
   ws = null;
   micStream = null;
   audioContext = null;
+  playContext = null;
   byId("voice-orb").disabled = false;
   byId("mute").classList.add("hidden");
   byId("stop-voice").classList.add("hidden");

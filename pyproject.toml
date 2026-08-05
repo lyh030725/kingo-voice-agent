@@ -13,6 +13,7 @@ dependencies = [
   "requests>=2.34,<3",
   "uvicorn[standard]>=0.51,<1",
   "webrtcvad-wheels>=2.0.14,<3",
+  "websockets>=16.1,<17",
 ]
 
 [tool.uv]

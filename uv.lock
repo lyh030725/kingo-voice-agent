@@ -323,6 +323,7 @@ dependencies = [
     { name = "requests" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "webrtcvad-wheels" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -335,6 +336,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.34,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.51,<1" },
     { name = "webrtcvad-wheels", specifier = ">=2.0.14,<3" },
+    { name = "websockets", specifier = ">=16.1,<17" },
 ]
 
 [[package]]
