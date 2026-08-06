@@ -33,6 +33,10 @@ class MvpTests(unittest.TestCase):
         self.assertIn("textbook or report-like prose", brain.SYSTEM_PROMPT)
         self.assertIn("Never put raw equations", brain.SYSTEM_PROMPT)
         self.assertIn("show_visualization first", brain.SYSTEM_PROMPT)
+        self.assertIn("When unsure whether visual support is useful, prefer calling", brain.SYSTEM_PROMPT)
+        self.assertIn("Do not send the final conversational answer until that tool", brain.SYSTEM_PROMPT)
+        self.assertIn("paraphrase any equation instead of quoting or reading it", brain.SYSTEM_PROMPT)
+        self.assertIn("repeat its LaTeX, symbols, equation, or coordinates", brain.SYSTEM_PROMPT)
         self.assertIn("제가 보여드린 그림처럼", brain.SYSTEM_PROMPT)
 
     def test_server_lifespan_survives_moss_quota(self) -> None:
@@ -131,7 +135,7 @@ class MvpTests(unittest.TestCase):
         self.assertIn("function addVisualization(visualization)", page)
         self.assertIn("function buildPlot(visualization, points)", page)
         self.assertIn('message.type === "visualization"', page)
-        self.assertIn('formula.textContent = "\\\\[" + visualization.latex + "\\\\]"', page)
+        self.assertIn('formula.textContent = "$$" + visualization.latex + "$$"', page)
 
     def test_professor_can_add_and_delete_trusted_sites(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(

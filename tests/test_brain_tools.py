@@ -220,6 +220,26 @@ class BrainToolTests(unittest.TestCase):
                 y_label="y",
             )
 
+    def test_tool_logs_include_args_status_timing_and_result(self) -> None:
+        args = {
+            "title": "소프트맥스",
+            "kind": "formula",
+            "caption": "확률로 변환해요.",
+            "latex": r"\frac{e^{x_i}}{\sum_j e^{x_j}}",
+            "labels": [],
+            "points": [],
+            "x_label": "",
+            "y_label": "",
+        }
+
+        with self.assertLogs(brain.log, level="INFO") as logs:
+            asyncio.run(brain.run_tool("show_visualization", args, brain.StageTimer()))
+
+        output = "\n".join(logs.output)
+        self.assertIn('tool call name=show_visualization args={"title":"소프트맥스"', output)
+        self.assertIn("tool result name=show_visualization status=ok elapsed_ms=", output)
+        self.assertIn('result={"title":"소프트맥스"', output)
+
     def test_tool_docstrings_describe_contracts(self) -> None:
         for target in (
             brain.save_weak_concept,

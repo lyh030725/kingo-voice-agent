@@ -276,7 +276,9 @@ search_course_materials together.
 
 # Evidence and sources
 Base factual claims only on tool results. For PDF evidence, state filename and
-page. If PDF evidence is missing or insufficient, call search_trusted_web.
+page, but paraphrase any equation instead of quoting or reading it. Put the
+exact equation in show_visualization. If PDF evidence is missing or
+insufficient, call search_trusted_web.
 Return source URLs through the separate sources field; do not repeat raw URLs
 in the conversational answer.
 
@@ -292,6 +294,12 @@ Never put raw equations, symbolic notation, diagrams, or coordinate data in
 the conversational answer and never read them symbol by symbol. When the
 answer would otherwise contain a formula, process diagram, or graph, you MUST
 call show_visualization first and put the exact visual data only in that tool.
+Treat any mathematical expression—including a single equation, variable
+relationship, Greek letter, fraction, exponent, subscript, or LaTeX—as a
+formula. When unsure whether visual support is useful, prefer calling
+show_visualization. Do not send the final conversational answer until that tool
+has succeeded. In the spoken answer, explain only what the visual means; never
+repeat its LaTeX, symbols, equation, or coordinates, even when quoting a PDF.
 Then explain it naturally with a reference such as '제가 보여드린 그림처럼'.
 
 # Response format
@@ -453,8 +461,9 @@ TOOLS = [
             "name": "show_visualization",
             "description": (
                 "Show a safe visual reference instead of putting formulas, diagrams, "
-                "or graph coordinates in the spoken answer. Call this whenever the "
-                "answer would otherwise contain one. Use formula for LaTeX, "
+                "or graph coordinates in the spoken answer. Prefer calling this even "
+                "for one equation or variable relationship, and whenever visual support "
+                "might help. Use formula for LaTeX, "
                 "flow for ordered labeled steps, or plot for numeric x/y points."
             ),
             "strict": True,
@@ -493,6 +502,17 @@ TOOLS = [
 
 def _json(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False)
+
+
+def _tool_log_value(value: object, limit: int = 600) -> str:
+    """Return compact, bounded JSON for tool debugging logs."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            pass
+    text = json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+    return text if len(text) <= limit else f"{text[:limit]}…"
 
 
 def show_visualization(**args) -> str:
@@ -757,31 +777,44 @@ async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
         "review_weak_concept": "review",
         "show_visualization": "visual",
     }.get(name, "tool")
+    log.info("tool call name=%s args=%s", name, _tool_log_value(args))
     try:
         if name == "recall_weak_concepts":
-            return await recall_weak_concepts(**args)
-        if name == "search_course_materials":
-            return await asyncio.to_thread(search_course_materials, **args)
-        if name == "search_trusted_web":
-            return await asyncio.to_thread(
+            result = await recall_weak_concepts(**args)
+        elif name == "search_course_materials":
+            result = await asyncio.to_thread(search_course_materials, **args)
+        elif name == "search_trusted_web":
+            result = await asyncio.to_thread(
                 search_trusted_web,
                 pdf_evidence_insufficient=True,
                 **args,
             )
-        if name == "save_weak_concept":
-            return await save_weak_concept(**args)
-        if name == "review_weak_concept":
-            return await review_weak_concept(**args)
-        if name == "show_visualization":
-            return show_visualization(**args)
-        return _json({"error": f"unknown tool: {name}"})
+        elif name == "save_weak_concept":
+            result = await save_weak_concept(**args)
+        elif name == "review_weak_concept":
+            result = await review_weak_concept(**args)
+        elif name == "show_visualization":
+            result = show_visualization(**args)
+        else:
+            result = _json({"error": f"unknown tool: {name}"})
     except (TypeError, ValueError) as exc:
-        return _json({"error": f"invalid {name} arguments: {exc}"})
+        result = _json({"error": f"invalid {name} arguments: {exc}"})
     except Exception as exc:
         log.exception("tool %s failed", name)
-        return _json({"error": str(exc)})
+        result = _json({"error": str(exc)})
     finally:
         timer.record(stage, started_at)
+    payload = json.loads(result)
+    status = "error" if isinstance(payload, dict) and "error" in payload else "ok"
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+    log.info(
+        "tool result name=%s status=%s elapsed_ms=%d result=%s",
+        name,
+        status,
+        elapsed_ms,
+        _tool_log_value(payload),
+    )
+    return result
 
 
 # Function-tool response pipeline.

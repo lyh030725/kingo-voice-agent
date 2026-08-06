@@ -16,7 +16,6 @@ from transport import (
     AGENT_RATE,
     CALLER_RATE,
     AgentAudio,
-    AgentTextDelta,
     AgentTurnDone,
     Failed,
     SessionReady,
@@ -46,6 +45,7 @@ class GrokTransport(Transport):
         self._closed = False
         self._tools_this_turn = 0
         self._agent_speaking = False
+        self._response_transcript = ""
 
     async def start(self) -> None:
         key = os.environ.get("XAI_API_KEY", "").strip()
@@ -114,7 +114,7 @@ class GrokTransport(Transport):
                     self._agent_speaking = True
                     yield AgentAudio(base64.b64decode(event["delta"]))
                 elif kind == "response.output_audio_transcript.delta":
-                    yield AgentTextDelta(event.get("delta", ""))
+                    self._response_transcript += event.get("delta", "")
                 elif kind == "response.function_call_arguments.done":
                     name = event.get("name", "")
                     call_id = event.get("call_id", "")
@@ -136,14 +136,18 @@ class GrokTransport(Transport):
                 elif kind == "response.done":
                     if self._tools_this_turn:
                         self._tools_this_turn = 0
+                        self._response_transcript = ""
                         await self._send({"type": "response.create"})
                     else:
                         self._agent_speaking = False
+                        if self._response_transcript:
+                            yield Transcript("agent", self._response_transcript)
+                        self._response_transcript = ""
                         yield AgentTurnDone()
                 elif kind.endswith("input_audio_transcription.completed"):
                     yield Transcript("user", event.get("transcript", ""))
                 elif kind.endswith("output_audio_transcript.done"):
-                    yield Transcript("agent", event.get("transcript", ""))
+                    self._response_transcript = event.get("transcript") or self._response_transcript
                 elif kind == "error":
                     yield Failed(event.get("error", {}).get("message", json.dumps(event)))
         except websockets.ConnectionClosed as exc:

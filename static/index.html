@@ -595,7 +595,7 @@ function addVisualization(visualization) {
   if (visualization.kind === "formula") {
     const formula = document.createElement("div");
     formula.className = "visualization-formula";
-    formula.textContent = "\\[" + visualization.latex + "\\]";
+    formula.textContent = "$$" + visualization.latex + "$$";
     bubble.appendChild(formula);
     if (window.MathJax.typesetPromise) window.MathJax.typesetPromise([formula]).catch(console.error);
   } else if (visualization.kind === "flow") {

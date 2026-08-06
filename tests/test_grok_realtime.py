@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import agent_spec
 import server
 from grok_live import GrokTransport
-from transport import AgentTextDelta, AgentTurnDone, ToolCalled, UserStartedSpeaking
+from transport import AgentTurnDone, ToolCalled, Transcript, UserStartedSpeaking
 
 
 class FakeSocket:
@@ -36,6 +36,10 @@ class FakeSocket:
 
 
 class GrokRealtimeTests(unittest.TestCase):
+    def test_filler_instruction_is_voice_only(self) -> None:
+        self.assertIn("Immediately before the first tool call", agent_spec.persona("socratic"))
+        self.assertNotIn("Voice-only filler", agent_spec.SYSTEM_PROMPT)
+
     def test_barge_in_flush_signal_also_cancels_model_response(self) -> None:
         async def scenario() -> None:
             transport = GrokTransport()
@@ -72,17 +76,26 @@ class GrokRealtimeTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_voice_transcript_delta_is_forwarded_immediately(self) -> None:
+    def test_filler_transcript_is_hidden_but_final_answer_is_forwarded(self) -> None:
         async def scenario() -> None:
             transport = GrokTransport()
             transport._ws = FakeSocket([
-                {"type": "response.output_audio_transcript.delta", "delta": "바로"},
+                {"type": "response.output_audio_transcript.delta", "delta": "잠시만요."},
+                {"type": "response.output_audio_transcript.done", "transcript": "잠시만요."},
+                {"type": "response.function_call_arguments.done", "name": "search", "call_id": "1", "arguments": "{}"},
+                {"type": "response.done"},
+                {"type": "response.output_audio_transcript.delta", "delta": "찾았어요."},
+                {"type": "response.output_audio_transcript.done", "transcript": "찾았어요."},
+                {"type": "response.done"},
             ])
             transport._connected.set()
 
-            events = [event async for event in transport.events()]
+            with patch.object(agent_spec, "run_tool", AsyncMock(return_value={"ok": True})):
+                events = [event async for event in transport.events()]
 
-            self.assertEqual(events, [AgentTextDelta("바로")])
+            self.assertNotIn(Transcript("agent", "잠시만요."), events)
+            self.assertIn(Transcript("agent", "찾았어요."), events)
+            self.assertEqual(transport._ws.sent.count({"type": "response.create"}), 1)
 
         asyncio.run(scenario())
 
