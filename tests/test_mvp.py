@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 os.environ["VOICE_AI_SKIP_DOTENV"] = "1"
@@ -19,15 +20,32 @@ import server
 class MvpTests(unittest.TestCase):
     def test_system_prompt_prefers_spoken_korean(self) -> None:
         for heading in (
-            "# Role and objective",
-            "# Language and speaking style",
-            "# Tool workflow",
-            "# Evidence and sources",
-            "# Learning memory",
-            "# Visual references",
-            "# Response format",
+            "# Role",
+            "# Language and style",
+            "# Tool usage",
+            "# Evidence and source rules",
+            "# Visualization rules",
+            "# Output format",
         ):
             self.assertIn(heading, brain.SYSTEM_PROMPT)
+        for tool_name in (
+            "recall_weak_concepts",
+            "search_course_materials",
+            "search_trusted_web",
+            "save_weak_concept",
+            "review_weak_concept",
+            "show_visualization",
+        ):
+            self.assertIn(f"{tool_name}:", brain.SYSTEM_PROMPT)
+        self.assertIn("Sungkyunkwan University student", brain.SYSTEM_PROMPT)
+        self.assertIn("Speak in Korean unless asked otherwise", brain.SYSTEM_PROMPT)
+        self.assertIn("At the start of every student turn", brain.SYSTEM_PROMPT)
+        self.assertIn("Base factual claims only on tool results", brain.SYSTEM_PROMPT)
+        self.assertIn("Return source URLs through the separate sources field", brain.SYSTEM_PROMPT)
+        self.assertIn("Ordinary questions are not weaknesses", brain.SYSTEM_PROMPT)
+        self.assertIn("memory id", brain.SYSTEM_PROMPT)
+        self.assertIn("one to three short conversational sentences", brain.SYSTEM_PROMPT)
+        self.assertIn("Never\nread raw JSON aloud", brain.SYSTEM_PROMPT)
         self.assertIn("polite 해요 style", brain.SYSTEM_PROMPT)
         self.assertIn("Avoid written declarative endings", brain.SYSTEM_PROMPT)
         self.assertIn("textbook or report-like prose", brain.SYSTEM_PROMPT)
@@ -146,6 +164,20 @@ class MvpTests(unittest.TestCase):
             self.assertNotIn("kosis.kr", brain.remove_trusted_domain("kosis.kr"))
             with self.assertRaises(ValueError):
                 brain.add_trusted_domain("not-a-domain")
+
+    def test_wikipedia_is_a_default_trusted_site(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            brain, "TRUSTED_SITES_FILE", Path(directory) / "trusted-sites.json"
+        ):
+            self.assertIn("wikipedia.org", brain.get_trusted_domains())
+            response = SimpleNamespace(
+                model_dump=lambda: {},
+                output_text="https://ko.wikipedia.org/wiki/시계열",
+            )
+            self.assertEqual(
+                brain._trusted_urls(response),
+                ["https://ko.wikipedia.org/wiki/시계열"],
+            )
 
     def test_text_chat_forwards_selected_mode(self) -> None:
         mocked = AsyncMock(return_value=("풀이", ["search_course_materials"], ["https://example.com/lesson"], []))

@@ -170,6 +170,41 @@ class BrainToolTests(unittest.TestCase):
         self.assertEqual(visualizations[0]["kind"], "formula")
         self.assertEqual(visualizations[0]["title"], "Attention 가중치")
 
+    def test_confusion_does_not_force_save_without_model_tool_call(self) -> None:
+        messages = iter([
+            SimpleNamespace(content=None, tool_calls=[
+                ToolCall("recall", "recall_weak_concepts", {"topic": "attention"}),
+                ToolCall("pdf", "search_course_materials", {"query": "attention"}),
+            ]),
+            SimpleNamespace(content="어느 부분부터 막히는지 같이 찾아볼까요?", tool_calls=[]),
+        ])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+            create=lambda **_kwargs: SimpleNamespace(
+                choices=[SimpleNamespace(message=next(messages))],
+            ),
+        )))
+
+        with (
+            patch.object(brain, "xai_client", return_value=client),
+            patch.object(
+                brain,
+                "recall_weak_concepts",
+                new=AsyncMock(return_value=json.dumps({"found": False, "memories": []})),
+            ),
+            patch.object(
+                brain,
+                "search_course_materials",
+                return_value=json.dumps({"found": False, "results": []}),
+            ),
+            patch.object(brain, "save_weak_concept", new=AsyncMock()) as save,
+        ):
+            _reply, tools, _sources, _visualizations = asyncio.run(
+                brain.think("Self-Attention을 잘 모르겠어", brain.StageTimer())
+            )
+
+        save.assert_not_awaited()
+        self.assertNotIn("save_weak_concept", tools)
+
     def test_stream_completion_emits_each_text_delta(self) -> None:
         chunks = iter([
             SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="첫 ", tool_calls=[]))]),

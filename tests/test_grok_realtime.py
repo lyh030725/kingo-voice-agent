@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import agent_spec
 import server
 from grok_live import GrokTransport
-from transport import AgentTurnDone, ToolCalled, Transcript, UserStartedSpeaking
+from transport import AgentAudio, AgentTextDelta, AgentTurnDone, Failed, ToolCalled, Transcript, UserStartedSpeaking
 
 
 class FakeSocket:
@@ -40,21 +40,40 @@ class GrokRealtimeTests(unittest.TestCase):
         self.assertIn("Immediately before the first tool call", agent_spec.persona("socratic"))
         self.assertNotIn("Voice-only filler", agent_spec.SYSTEM_PROMPT)
 
-    def test_barge_in_flush_signal_also_cancels_model_response(self) -> None:
+    def test_barge_in_cancels_active_response_and_discards_remaining_audio(self) -> None:
         async def scenario() -> None:
             transport = GrokTransport()
             transport._ws = FakeSocket([
+                {"type": "response.created"},
+                {"type": "response.output_audio.delta", "delta": "AQI="},
                 {"type": "input_audio_buffer.speech_started"},
+                {"type": "response.output_audio.delta", "delta": "AwQ="},
+                {"type": "error", "error": {"message": "Cancellation failed: no active response found"}},
                 {"type": "response.done"},
             ])
             transport._connected.set()
-            transport._agent_speaking = True
 
             events = [event async for event in transport.events()]
 
-            self.assertIsInstance(events[0], UserStartedSpeaking)
-            self.assertIsInstance(events[1], AgentTurnDone)
+            self.assertIn(UserStartedSpeaking(), events)
+            self.assertIn(AgentTurnDone(), events)
+            self.assertEqual(sum(isinstance(event, AgentAudio) for event in events), 1)
+            self.assertFalse(any(isinstance(event, Failed) for event in events))
             self.assertIn({"type": "response.cancel"}, transport._ws.sent)
+
+        asyncio.run(scenario())
+
+    def test_realtime_errors_other_than_stale_cancel_are_forwarded(self) -> None:
+        async def scenario() -> None:
+            transport = GrokTransport()
+            transport._ws = FakeSocket([
+                {"type": "error", "error": {"message": "authentication expired"}},
+            ])
+            transport._connected.set()
+
+            events = [event async for event in transport.events()]
+
+            self.assertEqual(events, [Failed("authentication expired")])
 
         asyncio.run(scenario())
 
@@ -76,7 +95,7 @@ class GrokRealtimeTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_filler_transcript_is_hidden_but_final_answer_is_forwarded(self) -> None:
+    def test_filler_and_final_answer_deltas_are_forwarded(self) -> None:
         async def scenario() -> None:
             transport = GrokTransport()
             transport._ws = FakeSocket([
@@ -93,9 +112,85 @@ class GrokRealtimeTests(unittest.TestCase):
             with patch.object(agent_spec, "run_tool", AsyncMock(return_value={"ok": True})):
                 events = [event async for event in transport.events()]
 
+            class Browser:
+                def __init__(self) -> None:
+                    self.sent = []
+
+                async def send_json(self, message: dict) -> None:
+                    self.sent.append(message)
+
+            class Provider:
+                async def events(self):
+                    for event in events:
+                        yield event
+
+            browser = Browser()
+            await server.pump_provider_events(browser, Provider())
+
+            self.assertEqual(
+                [event.text for event in events if isinstance(event, AgentTextDelta)],
+                ["잠시만요.", "찾았어요."],
+            )
             self.assertNotIn(Transcript("agent", "잠시만요."), events)
             self.assertIn(Transcript("agent", "찾았어요."), events)
             self.assertEqual(transport._ws.sent.count({"type": "response.create"}), 1)
+            self.assertEqual(
+                [message for message in browser.sent if message["type"] == "token"],
+                [
+                    {"type": "token", "text": "잠시만요."},
+                    {"type": "token", "text": "찾았어요."},
+                ],
+            )
+            self.assertEqual(
+                [message for message in browser.sent if message["type"] == "transcript"],
+                [{"type": "transcript", "who": "agent", "text": "찾았어요."}],
+            )
+
+        asyncio.run(scenario())
+
+    def test_cumulative_user_transcript_updates_ignore_exact_duplicates(self) -> None:
+        async def scenario() -> None:
+            transport = GrokTransport()
+            transport._ws = FakeSocket([
+                {"type": "conversation.item.input_audio_transcription.updated", "transcript": "어, 소프트"},
+                {"type": "conversation.item.input_audio_transcription.updated", "transcript": "어, 소프트맥스 연산이 뭐야?"},
+                {"type": "conversation.item.input_audio_transcription.updated", "transcript": "어, 소프트맥스 연산이 뭐야?"},
+            ])
+            transport._connected.set()
+
+            events = [event async for event in transport.events()]
+
+            self.assertEqual(events, [
+                Transcript("user", "어, 소프트"),
+                Transcript("user", "어, 소프트맥스 연산이 뭐야?"),
+            ])
+
+        asyncio.run(scenario())
+
+    def test_agent_transcript_streams_deltas_and_publishes_final_text(self) -> None:
+        async def scenario() -> None:
+            transport = GrokTransport()
+            transport._ws = FakeSocket([
+                {"type": "response.created"},
+                {"type": "response.output_audio_transcript.delta", "delta": "소프트맥스는 "},
+                {"type": "response.output_audio_transcript.delta", "delta": "확률로 바꿉니다."},
+                {"type": "response.output_audio_transcript.done", "transcript": "소프트맥스는 확률로 바꿉니다."},
+                {"type": "response.done"},
+                {"type": "response.output_audio_transcript.done", "transcript": "소프트맥스는 확률로 바꿉니다."},
+            ])
+            transport._connected.set()
+
+            events = [event async for event in transport.events()]
+
+            self.assertEqual(
+                [event.text for event in events if isinstance(event, AgentTextDelta)],
+                ["소프트맥스는 ", "확률로 바꿉니다."],
+            )
+            self.assertEqual(
+                [event for event in events if isinstance(event, Transcript)],
+                [Transcript("agent", "소프트맥스는 확률로 바꿉니다.")],
+            )
+            self.assertEqual(sum(isinstance(event, AgentTurnDone) for event in events), 1)
 
         asyncio.run(scenario())
 
@@ -108,6 +203,26 @@ class GrokRealtimeTests(unittest.TestCase):
         self.assertIn("voicePending.bubble.append(message.text)", page)
         self.assertIn("function flushPlayback()", page)
         self.assertIn("for (const source of activeSources)", page)
+
+    def test_browser_coalesces_voice_transcripts_and_waits_for_playback(self) -> None:
+        page = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("voiceUserPending.bubble.textContent = message.text", page)
+        self.assertIn("function replaceVoiceAssistantMessage", page)
+        self.assertIn("voicePending || voiceLastAssistant", page)
+        self.assertIn("voiceLastAssistant = voicePending", page)
+        self.assertIn(
+            '} else if (message.type === "tool") {\n'
+            "    if (voicePending) {\n"
+            '      setSymbolState(voicePending, "sustain");\n'
+            "      voicePending = null;",
+            page,
+        )
+        self.assertNotIn("voicePending.row.remove()", page)
+        self.assertIn('message.type === "turn_done"', page)
+        self.assertIn("activeSources.size === 0", page)
+        self.assertIn("@keyframes voice-heartbeat", page)
+        self.assertIn("prefers-reduced-motion: reduce", page)
 
     def test_voice_tool_result_reaches_visualization_renderer(self) -> None:
         visualization = {
@@ -136,6 +251,45 @@ class GrokRealtimeTests(unittest.TestCase):
         asyncio.run(server.pump_provider_events(browser, Provider()))
 
         self.assertIn({"type": "visualization", "visualization": visualization}, browser.sent)
+
+    def test_agent_turn_done_waits_for_browser_playback(self) -> None:
+        class Browser:
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send_json(self, message: dict) -> None:
+                self.sent.append(message)
+
+        class Provider:
+            async def events(self):
+                yield AgentTurnDone()
+
+        browser = Browser()
+        asyncio.run(server.pump_provider_events(browser, Provider()))
+
+        self.assertEqual(browser.sent, [{"type": "turn_done"}])
+
+    def test_barge_in_flushes_playback_after_provider_turn_is_done(self) -> None:
+        class Browser:
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send_json(self, message: dict) -> None:
+                self.sent.append(message)
+
+        class Provider:
+            async def events(self):
+                yield AgentTurnDone()
+                yield UserStartedSpeaking()
+
+        browser = Browser()
+        asyncio.run(server.pump_provider_events(browser, Provider()))
+
+        self.assertEqual(browser.sent, [
+            {"type": "turn_done"},
+            {"type": "state", "value": "hearing"},
+            {"type": "flush"},
+        ])
 
 
 if __name__ == "__main__":

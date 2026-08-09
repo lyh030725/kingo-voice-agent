@@ -364,9 +364,8 @@ async def pump_provider_events(ws: WebSocket, transport: Transport) -> None:
                     log.info("realtime session configured")
                 case UserStartedSpeaking():
                     await ws.send_json({"type": "state", "value": "hearing"})
-                    if speaking:
-                        speaking = False
-                        await ws.send_json({"type": "flush"})
+                    speaking = False
+                    await ws.send_json({"type": "flush"})
                 case UserStoppedSpeaking():
                     turn_ended_at = time.perf_counter()
                     await ws.send_json({"type": "state", "value": "thinking"})
@@ -389,7 +388,7 @@ async def pump_provider_events(ws: WebSocket, transport: Transport) -> None:
                     await ws.send_json({"type": "token", "text": text})
                 case AgentTurnDone():
                     speaking = False
-                    await ws.send_json({"type": "state", "value": "listening"})
+                    await ws.send_json({"type": "turn_done"})
                 case Transcript(who=who, text=text) if text:
                     await ws.send_json({"type": "transcript", "who": who, "text": text})
                 case ToolCalled(name=name, result=result):

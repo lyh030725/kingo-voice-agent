@@ -16,6 +16,7 @@ from transport import (
     AGENT_RATE,
     CALLER_RATE,
     AgentAudio,
+    AgentTextDelta,
     AgentTurnDone,
     Failed,
     SessionReady,
@@ -44,8 +45,12 @@ class GrokTransport(Transport):
         self._ready = asyncio.Event()
         self._closed = False
         self._tools_this_turn = 0
-        self._agent_speaking = False
         self._response_transcript = ""
+        self._response_transcript_emitted = False
+        self._response_done = False
+        self._last_user_transcript = ""
+        self._response_active = False
+        self._discard_response_output = False
 
     async def start(self) -> None:
         key = os.environ.get("XAI_API_KEY", "").strip()
@@ -103,18 +108,31 @@ class GrokTransport(Transport):
                 if kind == "session.updated":
                     self._ready.set()
                     yield SessionReady()
+                elif kind == "response.created":
+                    self._response_transcript = ""
+                    self._response_transcript_emitted = False
+                    self._response_done = False
+                    self._response_active = True
+                    self._discard_response_output = False
                 elif kind == "input_audio_buffer.speech_started":
                     yield UserStartedSpeaking()
-                    if self._agent_speaking:
-                        self._agent_speaking = False
+                    if self._response_active:
+                        self._response_active = False
+                        self._discard_response_output = True
                         await self._send({"type": "response.cancel"})
                 elif kind == "input_audio_buffer.speech_stopped":
                     yield UserStoppedSpeaking()
                 elif kind == "response.output_audio.delta":
-                    self._agent_speaking = True
+                    if self._discard_response_output:
+                        continue
                     yield AgentAudio(base64.b64decode(event["delta"]))
                 elif kind == "response.output_audio_transcript.delta":
-                    self._response_transcript += event.get("delta", "")
+                    if self._discard_response_output:
+                        continue
+                    delta = event.get("delta", "")
+                    self._response_transcript += delta
+                    if delta:
+                        yield AgentTextDelta(delta)
                 elif kind == "response.function_call_arguments.done":
                     name = event.get("name", "")
                     call_id = event.get("call_id", "")
@@ -134,22 +152,47 @@ class GrokTransport(Transport):
                     self._tools_this_turn += 1
                     yield ToolCalled(name, args, result)
                 elif kind == "response.done":
-                    if self._tools_this_turn:
+                    self._response_active = False
+                    if self._discard_response_output:
+                        self._tools_this_turn = 0
+                        self._discard_response_output = False
+                        self._response_transcript = ""
+                        self._response_transcript_emitted = False
+                        self._response_done = False
+                        yield AgentTurnDone()
+                    elif self._tools_this_turn:
                         self._tools_this_turn = 0
                         self._response_transcript = ""
+                        self._response_transcript_emitted = False
+                        self._response_done = False
                         await self._send({"type": "response.create"})
                     else:
-                        self._agent_speaking = False
-                        if self._response_transcript:
+                        self._response_done = True
+                        self._response_transcript = self._response_transcript or _transcript_from_response(event)
+                        if self._response_transcript and not self._response_transcript_emitted:
                             yield Transcript("agent", self._response_transcript)
-                        self._response_transcript = ""
+                            self._response_transcript_emitted = True
                         yield AgentTurnDone()
-                elif kind.endswith("input_audio_transcription.completed"):
-                    yield Transcript("user", event.get("transcript", ""))
+                elif kind in {
+                    "conversation.item.input_audio_transcription.updated",
+                    "conversation.item.input_audio_transcription.completed",
+                } or kind.endswith("input_audio_transcription.completed"):
+                    transcript = event.get("transcript") or event.get("text") or ""
+                    if transcript and transcript != self._last_user_transcript:
+                        self._last_user_transcript = transcript
+                        yield Transcript("user", transcript)
                 elif kind.endswith("output_audio_transcript.done"):
                     self._response_transcript = event.get("transcript") or self._response_transcript
+                    if self._response_done and self._response_transcript and not self._response_transcript_emitted:
+                        self._response_transcript_emitted = True
+                        yield Transcript("agent", self._response_transcript)
                 elif kind == "error":
-                    yield Failed(event.get("error", {}).get("message", json.dumps(event)))
+                    message = event.get("error", {}).get("message", json.dumps(event))
+                    if _is_stale_cancel_error(message):
+                        self._response_active = False
+                        log.info("ignoring stale realtime cancellation: %s", message)
+                        continue
+                    yield Failed(message)
         except websockets.ConnectionClosed as exc:
             yield Failed(f"model connection closed: {exc}")
         finally:
@@ -164,3 +207,18 @@ class GrokTransport(Transport):
     async def _send(self, payload: dict) -> None:
         assert self._ws is not None
         await self._ws.send(json.dumps(payload))
+
+
+def _transcript_from_response(event: dict) -> str:
+    """Read the final transcript when xAI includes it only in response.done."""
+    for item in event.get("response", {}).get("output", []):
+        for content in item.get("content", []):
+            transcript = content.get("transcript") or content.get("text")
+            if transcript:
+                return transcript
+    return ""
+
+
+def _is_stale_cancel_error(message: str) -> bool:
+    normalized = message.casefold()
+    return "cancellation failed" in normalized and "no active response found" in normalized

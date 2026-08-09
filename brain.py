@@ -46,6 +46,7 @@ DEFAULT_TRUSTED_WEB_DOMAINS = (
     "aclanthology.org",
     "proceedings.neurips.cc",
     "jmlr.org",
+    "wikipedia.org",
 )
 TRUSTED_SITES_FILE = BASE_DIR / "trusted-sites.json"
 MAX_MATERIAL_BYTES = 25 * 1024 * 1024
@@ -230,13 +231,6 @@ class TextQuestion(BaseModel):
     mode: Literal["explain", "socratic"] = "socratic"
 
 
-class WeakConceptCapture(BaseModel):
-    course: str
-    concept: str
-    original_question: str
-    difficulty_note: str
-
-
 class PlotPoint(BaseModel):
     x: float = Field(ge=-1e12, le=1e12)
     y: float = Field(ge=-1e12, le=1e12)
@@ -259,37 +253,46 @@ HISTORY: list[dict] = []
 # ponytail: one in-process student session; split by authenticated user when auth lands.
 
 SYSTEM_PROMPT = """
-# Role and objective
+# Role
 You are KINGO VOICE TA, a Socratic voice teaching assistant for one
 Sungkyunkwan University student.
 
-# Language and speaking style
+# Language and style
 Speak in Korean unless asked otherwise. Use natural spoken Korean in the
 polite 해요 style, as if talking with the student face to face. Prefer endings
 such as 해요, 예요, 볼까요, and 해볼게요. Avoid written declarative endings such
 as 한다, 이다, and 하였다, and avoid textbook or report-like prose unless you are
 quoting a source.
 
-# Tool workflow
-At the start of every student turn, call recall_weak_concepts and
-search_course_materials together.
+# Tool usage
+recall_weak_concepts: At the start of every student turn, recall relevant
+weaknesses and use them to personalize hints and check prerequisites. Call it
+together with search_course_materials.
 
-# Evidence and sources
+search_course_materials: At the start of every student turn, search the course
+PDFs for evidence. Call it together with recall_weak_concepts.
+
+search_trusted_web: Call only when PDF evidence is missing or insufficient.
+
+save_weak_concept: Call only when you judge that the student shows explicit
+confusion, gives an incorrect answer, or gives an incomplete explanation.
+Ordinary questions are not weaknesses.
+
+review_weak_concept: When the student answers a review prompt containing a
+memory id, call it with your correctness judgment.
+
+show_visualization: Call before the final answer when it would otherwise
+contain a formula, process diagram, graph, or other visual data. Follow all
+visualization rules below.
+
+# Evidence and source rules
 Base factual claims only on tool results. For PDF evidence, state filename and
 page, but paraphrase any equation instead of quoting or reading it. Put the
-exact equation in show_visualization. If PDF evidence is missing or
-insufficient, call search_trusted_web.
+exact equation in show_visualization.
 Return source URLs through the separate sources field; do not repeat raw URLs
 in the conversational answer.
 
-# Learning memory
-Use recalled weaknesses to personalize hints and check prerequisites. Call
-save_weak_concept only for explicit confusion, an incorrect answer, or an
-incomplete explanation; ordinary questions are not weaknesses. When the
-student answers a review prompt containing a memory id, call
-review_weak_concept with your correctness judgment.
-
-# Visual references
+# Visualization rules
 Never put raw equations, symbolic notation, diagrams, or coordinate data in
 the conversational answer and never read them symbol by symbol. When the
 answer would otherwise contain a formula, process diagram, or graph, you MUST
@@ -302,7 +305,7 @@ has succeeded. In the spoken answer, explain only what the visual means; never
 repeat its LaTeX, symbols, equation, or coordinates, even when quoting a PDF.
 Then explain it naturally with a reference such as '제가 보여드린 그림처럼'.
 
-# Response format
+# Output format
 Use one to three short conversational sentences with no markdown lists. Never
 read raw JSON aloud.
 """.strip()
@@ -369,7 +372,7 @@ TOOLS = [
         "function": {
             "name": "search_trusted_web",
             "description": (
-                "Search trusted academic or SKKU domains only after course "
+                "Search professor-approved trusted domains only after course "
                 "material search is missing or insufficient."
             ),
             "strict": True,
@@ -820,28 +823,6 @@ async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
 # Function-tool response pipeline.
 # --------------------------------------------------------------------------
 
-CONFUSION_MARKERS = (
-    "모르겠", "모르겠어", "잘 모르", "어려워", "어렵", "헷갈",
-    "이해가 안", "이해 안", "이해되지", "감이 안", "막혀", "틀린 것 같",
-    "don't know", "do not know", "confused", "difficult", "hard to understand",
-)
-
-
-def _explicit_confusion(transcript: str) -> bool:
-    normalized = transcript.casefold()
-    return any(marker in normalized for marker in CONFUSION_MARKERS)
-
-
-def _fallback_weak_concept(transcript: str) -> WeakConceptCapture:
-    concise_question = re.sub(r"\s+", " ", transcript).strip()
-    return WeakConceptCapture(
-        course="미지정 과목",
-        concept=concise_question[:160],
-        original_question=concise_question,
-        difficulty_note="학생이 명시적으로 이해 부족, 혼란 또는 어려움을 표현함",
-    )
-
-
 def _append_history(message: dict) -> None:
     HISTORY.append(message)
     if len(HISTORY) > MAX_HISTORY_MESSAGES:
@@ -976,11 +957,6 @@ async def think(
             reply_text = (msg.content or "").strip() or "답변을 생성하지 못했어요. 다시 질문해 주세요."
             if external_sources:
                 reply_text = _for_speech(reply_text)
-
-            if _explicit_confusion(transcript) and "save_weak_concept" not in tools_used:
-                memory = _fallback_weak_concept(transcript)
-                await run_tool("save_weak_concept", memory.model_dump(), timer)
-                tools_used.append("save_weak_concept")
 
             _append_history({"role": "assistant", "content": reply_text})
             return reply_text, tools_used, external_sources[:3], visualizations

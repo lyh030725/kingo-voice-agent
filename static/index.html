@@ -294,14 +294,40 @@ button { cursor: pointer; }
 .voice-panel { align-self: start; text-align: center; }
 .voice-panel .card-body { padding: 28px 18px; }
 .voice-orb {
+  position: relative; isolation: isolate; overflow: visible;
   width: 116px; height: 116px; border-radius: 50%; border: 0;
   margin: 9px auto 16px; display: grid; place-items: center;
-  color: white; background: var(--skku); box-shadow: 0 0 0 9px #e7f0f7;
-  font-weight: 700; transition: .2s;
+  color: white;
+  background:
+    radial-gradient(circle at 34% 72%, rgba(255,255,255,.95) 0 8%, rgba(210,226,255,.78) 35%, transparent 58%),
+    linear-gradient(145deg, #7093ff 4%, #8b87ff 44%, #d8e8ff 100%);
+  box-shadow: 0 12px 30px rgba(76, 106, 190, .24), 0 0 0 9px #e7edf9;
+  font-weight: 700; transition: transform .25s, box-shadow .25s, filter .25s;
 }
-.voice-orb.hearing { background: #3385c6; box-shadow: 0 0 0 13px #dcecf8; transform: scale(1.03); }
-.voice-orb.thinking { background: #72579c; box-shadow: 0 0 0 9px #ece6f4; }
-.voice-orb.speaking { background: var(--green); box-shadow: 0 0 0 13px #e3efdc; }
+.voice-orb::before, .voice-orb::after {
+  content: ""; position: absolute; z-index: -1; inset: -8px;
+  border-radius: inherit; background: rgba(102, 128, 224, .18); opacity: 0;
+}
+.voice-orb::after { inset: -17px; background: rgba(117, 102, 217, .1); }
+.voice-orb.idle { background: var(--skku); box-shadow: 0 0 0 9px #e7f0f7; }
+.voice-orb.listening { animation: voice-breathe 2.8s ease-in-out infinite; }
+.voice-orb.hearing { filter: saturate(1.14); animation: voice-heartbeat 1.05s ease-in-out infinite; }
+.voice-orb.thinking { animation: voice-think 1.65s ease-in-out infinite; }
+.voice-orb.speaking { animation: voice-heartbeat .82s ease-in-out infinite; }
+.voice-orb.hearing::before, .voice-orb.hearing::after,
+.voice-orb.speaking::before, .voice-orb.speaking::after { animation: voice-ripple 1.55s ease-out infinite; }
+.voice-orb.hearing::after, .voice-orb.speaking::after { animation-delay: .28s; }
+.voice-orb-label { position: relative; z-index: 1; }
+@keyframes voice-heartbeat {
+  0%, 100% { transform: scale(1); }
+  16% { transform: scale(1.08); }
+  31% { transform: scale(.99); }
+  46% { transform: scale(1.045); }
+  66% { transform: scale(1); }
+}
+@keyframes voice-breathe { 0%, 100% { transform: scale(.98); } 50% { transform: scale(1.035); } }
+@keyframes voice-think { 0%, 100% { transform: scale(.97) rotate(-2deg); } 50% { transform: scale(1.04) rotate(2deg); } }
+@keyframes voice-ripple { 0% { opacity: .65; transform: scale(.82); } 100% { opacity: 0; transform: scale(1.18); } }
 .voice-orb:disabled { cursor: default; }
 .voice-status { color: #40546b; font-weight: 600; }
 .voice-help { color: var(--muted); font-size: 12px; margin: 8px 0 16px; }
@@ -309,6 +335,9 @@ button { cursor: pointer; }
 .hidden { display: none !important; }
 .screen[hidden] { display: none; }
 .empty { color: var(--muted); padding: 15px 0; text-align: center; }
+@media (prefers-reduced-motion: reduce) {
+  .voice-orb, .voice-orb::before, .voice-orb::after { animation: none !important; }
+}
 @media (max-width: 1050px) {
   .teacher-grid, .chat-layout { grid-template-columns: 1fr; }
   .voice-panel { width: 100%; }
@@ -402,7 +431,7 @@ button { cursor: pointer; }
           <aside class="card voice-panel">
             <div class="card-head"><h2>음성으로 질문</h2></div>
             <div class="card-body">
-              <button id="voice-orb" class="voice-orb" type="button" aria-label="음성 대화 시작">음성 시작</button>
+              <button id="voice-orb" class="voice-orb idle" type="button" aria-label="음성 대화 시작"><span class="voice-orb-label">음성 시작</span></button>
               <div id="voice-status" class="voice-status">마이크가 꺼져 있습니다</div>
               <p class="voice-help">한 번 시작하면 버튼 없이 자연스럽게 이어서 대화할 수 있습니다.</p>
               <div class="voice-controls">
@@ -1030,7 +1059,8 @@ function setVoiceState(next, label) {
   state = next;
   const orb = byId("voice-orb");
   orb.className = "voice-orb " + next;
-  orb.textContent = label;
+  orb.setAttribute("aria-label", label);
+  orb.querySelector(".voice-orb-label").textContent = next === "idle" ? "음성 시작" : "";
   byId("voice-status").textContent = label;
 }
 
@@ -1084,29 +1114,71 @@ function sendSamples(block) {
   }
 }
 
+function replaceVoiceAssistantMessage(current, text, tools, timings) {
+  const finalized = addMessage("assistant", text, tools, timings);
+  if (current && current.row.isConnected) current.row.replaceWith(finalized.row);
+  return finalized;
+}
+
 function handleSocket(message) {
   if (message.type === "ready") {
     setVoiceState("listening", "듣는 중");
   } else if (message.type === "state") {
     const labels = { hearing: "말씀 듣는 중", thinking: "응답 준비 중", speaking: "응답 중", listening: "듣는 중" };
+    if (message.value === "hearing") {
+      voiceUserPending = null;
+      if (voicePending) {
+        setSymbolState(voicePending, "sustain");
+        voiceLastAssistant = voicePending;
+        voicePending = null;
+      } else {
+        voiceLastAssistant = null;
+      }
+      voiceTurnDone = false;
+    } else if (message.value === "speaking") {
+      voiceLastAssistant = null;
+      voiceTurnDone = false;
+    }
     setVoiceState(message.value, labels[message.value] || message.value);
   } else if (message.type === "flush") {
     flushPlayback();
   } else if (message.type === "token") {
-    if (!voicePending) voicePending = addMessage("assistant", "", null, null, null, "flow");
+    if (!voicePending) {
+      voiceLastAssistant = null;
+      voicePending = addMessage("assistant", "", null, null, null, "flow");
+    }
     voicePending.bubble.append(message.text);
     byId("messages").scrollTop = byId("messages").scrollHeight;
   } else if (message.type === "transcript") {
     if (message.who === "user") {
-      addMessage("user", message.text);
+      if (!voiceUserPending) voiceUserPending = addMessage("user", message.text);
+      else voiceUserPending.bubble.textContent = message.text;
+      byId("messages").scrollTop = byId("messages").scrollHeight;
     } else {
-      if (voicePending) voicePending.row.remove();
-      addMessage("assistant", message.text, voiceTools, voiceLatency === undefined ? null : { first_audio: voiceLatency });
+      voiceLastAssistant = replaceVoiceAssistantMessage(
+        voicePending || voiceLastAssistant,
+        message.text,
+        voiceTools,
+        voiceLatency === undefined ? null : { first_audio: voiceLatency },
+      );
       voicePending = null;
       voiceTools = [];
       voiceLatency = undefined;
     }
+  } else if (message.type === "turn_done") {
+    if (voicePending) {
+      setSymbolState(voicePending, "sustain");
+      voiceLastAssistant = voicePending;
+      voicePending = null;
+    }
+    voiceTurnDone = true;
+    finishVoicePlaybackIfReady();
   } else if (message.type === "tool") {
+    if (voicePending) {
+      setSymbolState(voicePending, "sustain");
+      voicePending = null;
+      voiceLastAssistant = null;
+    }
     voiceTools.push(message.name);
   } else if (message.type === "visualization") {
     addVisualization(message.visualization);
@@ -1125,6 +1197,9 @@ let nextPlayAt = 0;
 let voiceTools = [];
 let voiceLatency;
 let voicePending = null;
+let voiceLastAssistant = null;
+let voiceUserPending = null;
+let voiceTurnDone = false;
 const activeSources = new Set();
 
 function initPlayback() {
@@ -1148,7 +1223,17 @@ function playChunk(bytes, rate) {
   source.start(startAt);
   nextPlayAt = startAt + buffer.duration;
   activeSources.add(source);
-  source.onended = () => activeSources.delete(source);
+  source.onended = () => {
+    activeSources.delete(source);
+    finishVoicePlaybackIfReady();
+  };
+}
+
+function finishVoicePlaybackIfReady() {
+  if (voiceTurnDone && activeSources.size === 0) {
+    voiceTurnDone = false;
+    setVoiceState("listening", "듣는 중");
+  }
 }
 
 function flushPlayback() {
@@ -1157,6 +1242,7 @@ function flushPlayback() {
   }
   activeSources.clear();
   nextPlayAt = 0;
+  voiceTurnDone = false;
 }
 
 byId("mute").addEventListener("click", () => {
