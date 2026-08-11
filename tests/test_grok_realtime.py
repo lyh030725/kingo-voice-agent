@@ -252,6 +252,28 @@ class GrokRealtimeTests(unittest.TestCase):
 
         self.assertIn({"type": "visualization", "visualization": visualization}, browser.sent)
 
+    def test_voice_visualization_error_is_not_silent(self) -> None:
+        result = {"error": "invalid show_visualization arguments"}
+
+        class Browser:
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send_json(self, message: dict) -> None:
+                self.sent.append(message)
+
+        class Provider:
+            async def events(self):
+                yield ToolCalled("show_visualization", {}, result)
+
+        browser = Browser()
+        asyncio.run(server.pump_provider_events(browser, Provider()))
+
+        self.assertIn({
+            "type": "visualization_error",
+            "message": "시각자료를 표시하지 못했어요. 다시 요청해 주세요.",
+        }, browser.sent)
+
     def test_agent_turn_done_waits_for_browser_playback(self) -> None:
         class Browser:
             def __init__(self) -> None:

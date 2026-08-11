@@ -18,7 +18,7 @@ from pathlib import Path
 import requests
 import webrtcvad
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -28,6 +28,7 @@ from brain import (
     _for_speech,
     add_course_material,
     add_trusted_domain,
+    get_course_material_path,
     get_trusted_domains,
     list_course_materials,
     next_review_prompt,
@@ -394,7 +395,13 @@ async def pump_provider_events(ws: WebSocket, transport: Transport) -> None:
                 case ToolCalled(name=name, result=result):
                     await ws.send_json({"type": "tool", "name": name})
                     if name == "show_visualization" and isinstance(result, dict):
-                        await ws.send_json({"type": "visualization", "visualization": result})
+                        if "error" in result:
+                            await ws.send_json({
+                                "type": "visualization_error",
+                                "message": "시각자료를 표시하지 못했어요. 다시 요청해 주세요.",
+                            })
+                        else:
+                            await ws.send_json({"type": "visualization", "visualization": result})
                 case Failed(message=message):
                     await ws.send_json({"type": "error", "message": message})
                     return
@@ -520,6 +527,30 @@ async def materials() -> dict:
         Course name and uploaded material records.
     """
     return {"course": COURSE_NAME, "materials": list_course_materials()}
+
+
+@app.get("/api/materials/{filename}", response_class=FileResponse)
+async def course_material_file(filename: str) -> FileResponse:
+    """Display one uploaded course PDF in the browser.
+
+    Args:
+        filename: Plain uploaded PDF filename.
+
+    Returns:
+        Inline PDF response used by page visualizations.
+    """
+    try:
+        path = get_course_material_path(filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="course material not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=path.name,
+        content_disposition_type="inline",
+    )
 
 
 @app.post("/api/materials")

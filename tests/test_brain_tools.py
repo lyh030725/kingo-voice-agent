@@ -4,10 +4,13 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+from pypdf import PdfWriter
 
 os.environ["VOICE_AI_SKIP_DOTENV"] = "1"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -254,6 +257,42 @@ class BrainToolTests(unittest.TestCase):
                 x_label="x",
                 y_label="y",
             )
+
+    def test_visualization_accepts_only_existing_pdf_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            brain, "COURSE_SRCS_DIR", Path(directory)
+        ):
+            pdf_path = Path(directory) / "week-04.pdf"
+            writer = PdfWriter()
+            writer.add_blank_page(width=612, height=792)
+            writer.add_blank_page(width=612, height=792)
+            with pdf_path.open("wb") as stream:
+                writer.write(stream)
+
+            result = json.loads(brain.show_visualization(
+                title="4주차 강의자료",
+                kind="pdf",
+                caption="Attention 계산 과정을 설명하는 페이지예요.",
+                file="week-04.pdf",
+                page=2,
+            ))
+
+            self.assertEqual(result["file"], "week-04.pdf")
+            self.assertEqual(result["page"], 2)
+            for filename, page in (("../week-04.pdf", 1), ("missing.pdf", 1), ("week-04.pdf", 3)):
+                with self.assertRaises(ValueError):
+                    brain.show_visualization(
+                        title="잘못된 페이지",
+                        kind="pdf",
+                        caption="표시할 수 없어요.",
+                        latex="",
+                        labels=[],
+                        points=[],
+                        x_label="",
+                        y_label="",
+                        file=filename,
+                        page=page,
+                    )
 
     def test_tool_logs_include_args_status_timing_and_result(self) -> None:
         args = {

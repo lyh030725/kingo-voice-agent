@@ -10,6 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from pypdf import PdfWriter
+
 os.environ["VOICE_AI_SKIP_DOTENV"] = "1"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -153,7 +155,35 @@ class MvpTests(unittest.TestCase):
         self.assertIn("function addVisualization(visualization)", page)
         self.assertIn("function buildPlot(visualization, points)", page)
         self.assertIn('message.type === "visualization"', page)
+        self.assertIn('message.type === "visualization_error"', page)
         self.assertIn('formula.textContent = "$$" + visualization.latex + "$$"', page)
+        self.assertIn('["formula", "flow", "plot", "pdf"]', page)
+        self.assertIn("pdfjs-dist@6.2.108/build/pdf.min.mjs", page)
+        self.assertIn("async function buildPdfPage", page)
+        self.assertIn("await pdf.getPage(visualization.page)", page)
+        self.assertIn("window.devicePixelRatio || 1", page)
+        self.assertIn('document.createElement("canvas")', page)
+        self.assertIn('encodeURIComponent(visualization.file)', page)
+        self.assertNotIn('document.createElement("iframe")', page)
+
+    def test_course_material_pdf_is_served_inline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            brain, "COURSE_SRCS_DIR", Path(directory)
+        ):
+            pdf_path = Path(directory) / "week-04.pdf"
+            writer = PdfWriter()
+            writer.add_blank_page(width=612, height=792)
+            with pdf_path.open("wb") as stream:
+                writer.write(stream)
+
+            response = asyncio.run(server.course_material_file("week-04.pdf"))
+
+            self.assertEqual(Path(response.path), pdf_path)
+            self.assertEqual(response.media_type, "application/pdf")
+            self.assertTrue(response.headers["content-disposition"].startswith("inline;"))
+            with self.assertRaises(server.HTTPException) as missing:
+                asyncio.run(server.course_material_file("missing.pdf"))
+            self.assertEqual(missing.exception.status_code, 404)
 
     def test_professor_can_add_and_delete_trusted_sites(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(

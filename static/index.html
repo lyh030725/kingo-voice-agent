@@ -6,6 +6,10 @@
 <title>시계열데이터처리개론 | i-Campus</title>
 <script>
 window.MathJax = { tex: { inlineMath: [["$", "$"]], displayMath: [["$$", "$$"]] } };
+window.pdfjsReady = import("https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.min.mjs").then((pdfjsLib) => {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs";
+  return pdfjsLib;
+});
 </script>
 <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"></script>
 <style>
@@ -271,7 +275,8 @@ button { cursor: pointer; }
 .message.user .bubble { background: #eaf3fa; border-color: #c9dce9; border-radius: 12px 4px 12px 12px; }
 .tool-row { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
 .tool-chip { border-radius: 10px; background: #eaf5e5; color: #4d7535; padding: 2px 7px; font-size: 10px; }
-.visualization-bubble { width: min(100%, 620px); padding: 16px; }
+.bubble-wrap.visualization-wrap { width: min(92%, 820px); max-width: min(92%, 820px); }
+.visualization-bubble { width: 100%; padding: 16px; }
 .visualization-title { margin: 0 0 12px; color: #263b50; font-size: 14px; }
 .visualization-caption { margin: 12px 0 0; color: #617184; font-size: 12px; }
 .visualization-formula { overflow-x: auto; padding: 12px 4px; text-align: center; font-size: 18px; }
@@ -283,6 +288,11 @@ button { cursor: pointer; }
 .visualization-line { fill: none; stroke: #1768a5; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
 .visualization-point { fill: #1768a5; }
 .visualization-label { fill: #617184; font-size: 12px; }
+.visualization-pdf-page { overflow: hidden; border: 1px solid #d7e1e9; border-radius: 6px; background: #f4f6f8; }
+.visualization-pdf-canvas { display: block; width: 100%; height: auto; background: white; }
+.visualization-pdf-status { margin: 0; padding: 28px 16px; color: #617184; text-align: center; }
+.visualization-pdf-error { color: var(--danger); }
+.visualization-pdf-link { display: inline-block; margin-top: 8px; color: #1768a5; font-size: 12px; }
 .source-list { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e4e9ee; display: grid; gap: 5px; }
 .source-title { color: #6b7989; font-size: 11px; font-weight: 700; }
 .source-link { display: block; max-width: 100%; color: #1768a5; font-size: 12px; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -610,9 +620,10 @@ function addMessage(role, text, tools, timings, sources, symbolState = "sustain"
 }
 
 function addVisualization(visualization) {
-  if (!visualization || !["formula", "flow", "plot"].includes(visualization.kind)) return;
+  if (!visualization || !["formula", "flow", "plot", "pdf"].includes(visualization.kind)) return;
   const message = addMessage("assistant", "");
   const bubble = message.bubble;
+  bubble.parentElement.classList.add("visualization-wrap");
   bubble.classList.add("visualization-bubble");
   bubble.replaceChildren();
 
@@ -644,9 +655,23 @@ function addVisualization(visualization) {
       }
     });
     bubble.appendChild(flow);
-  } else {
+  } else if (visualization.kind === "plot") {
     const points = visualization.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
     if (points.length >= 2) bubble.appendChild(buildPlot(visualization, points));
+  } else if (typeof visualization.file === "string" && Number.isInteger(visualization.page) && visualization.page > 0) {
+    const pdfUrl = "/api/materials/" + encodeURIComponent(visualization.file) + "#page=" + visualization.page + "&view=FitH";
+    const page = document.createElement("div");
+    page.className = "visualization-pdf-page";
+    bubble.appendChild(page);
+    buildPdfPage(visualization, pdfUrl.split("#")[0], page);
+
+    const open = document.createElement("a");
+    open.className = "visualization-pdf-link";
+    open.href = pdfUrl;
+    open.target = "_blank";
+    open.rel = "noopener noreferrer";
+    open.textContent = visualization.page + "페이지를 새 탭에서 열기";
+    bubble.appendChild(open);
   }
 
   const caption = document.createElement("p");
@@ -654,6 +679,35 @@ function addVisualization(visualization) {
   caption.textContent = visualization.caption;
   bubble.appendChild(caption);
   byId("messages").scrollTop = byId("messages").scrollHeight;
+}
+
+async function buildPdfPage(visualization, pdfUrl, container) {
+  const status = document.createElement("p");
+  status.className = "visualization-pdf-status";
+  status.textContent = visualization.page + "페이지를 불러오는 중이에요.";
+  const canvas = document.createElement("canvas");
+  canvas.className = "visualization-pdf-canvas";
+  canvas.setAttribute("aria-label", visualization.file + " " + visualization.page + "페이지");
+  container.append(status, canvas);
+
+  try {
+    const pdfjsLib = await window.pdfjsReady;
+    const pdf = await pdfjsLib.getDocument({ url: pdfUrl }).promise;
+    const page = await pdf.getPage(visualization.page);
+    const viewport = page.getViewport({ scale: 1.6 });
+    const outputScale = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(viewport.width * outputScale);
+    canvas.height = Math.floor(viewport.height * outputScale);
+    const context = canvas.getContext("2d");
+    const transform = outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0];
+    await page.render({ canvasContext: context, transform: transform, viewport: viewport }).promise;
+    status.remove();
+  } catch (error) {
+    canvas.remove();
+    status.classList.add("visualization-pdf-error");
+    status.textContent = "요청한 PDF 페이지를 표시하지 못했어요. 아래 링크로 열어 주세요.";
+    console.error("PDF page rendering failed", error);
+  }
 }
 
 function buildPlot(visualization, points) {
@@ -1182,6 +1236,8 @@ function handleSocket(message) {
     voiceTools.push(message.name);
   } else if (message.type === "visualization") {
     addVisualization(message.visualization);
+  } else if (message.type === "visualization_error") {
+    addMessage("assistant", message.message, null, null, null, "error");
   } else if (message.type === "latency") {
     voiceLatency = message.ms;
   } else if (message.type === "audio") {

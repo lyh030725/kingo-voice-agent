@@ -69,6 +69,25 @@ def list_course_materials() -> list[dict]:
     ]
 
 
+def get_course_material_path(filename: str) -> Path:
+    """Resolve one uploaded PDF without allowing directory traversal.
+
+    Args:
+        filename: Plain PDF filename without directory components.
+
+    Returns:
+        Existing path inside the course materials directory.
+    """
+    if not filename or filename != Path(filename).name or any(char in filename for char in ("\\", "\0")):
+        raise ValueError("invalid filename")
+    if Path(filename).suffix.casefold() != ".pdf":
+        raise ValueError("only PDF course materials are supported")
+    path = COURSE_SRCS_DIR / filename
+    if not path.is_file():
+        raise FileNotFoundError(filename)
+    return path
+
+
 def add_course_material(filename: str, content: bytes) -> dict:
     """Save one professor-uploaded course PDF and invalidate search cache.
 
@@ -98,13 +117,7 @@ def add_course_material(filename: str, content: bytes) -> dict:
 def remove_course_material(filename: str) -> None:
     """Delete one uploaded PDF and invalidate the search cache."""
     global PDF_PAGE_CACHE
-    if not filename or filename != Path(filename).name or any(char in filename for char in ("\\", "\0")):
-        raise ValueError("invalid filename")
-    if Path(filename).suffix.casefold() != ".pdf":
-        raise ValueError("only PDF course materials are supported")
-    path = COURSE_SRCS_DIR / filename
-    if not path.is_file():
-        raise FileNotFoundError(filename)
+    path = get_course_material_path(filename)
     path.unlink()
     PDF_PAGE_CACHE = None
 
@@ -238,13 +251,15 @@ class PlotPoint(BaseModel):
 
 class Visualization(BaseModel):
     title: str = Field(min_length=1, max_length=120)
-    kind: Literal["formula", "flow", "plot"]
+    kind: Literal["formula", "flow", "plot", "pdf"]
     caption: str = Field(min_length=1, max_length=300)
-    latex: str = Field(max_length=1000)
-    labels: list[str] = Field(max_length=8)
-    points: list[PlotPoint] = Field(max_length=40)
-    x_label: str = Field(max_length=40)
-    y_label: str = Field(max_length=40)
+    latex: str = Field(default="", max_length=1000)
+    labels: list[str] = Field(default_factory=list, max_length=8)
+    points: list[PlotPoint] = Field(default_factory=list, max_length=40)
+    x_label: str = Field(default="", max_length=40)
+    y_label: str = Field(default="", max_length=40)
+    file: str = Field(default="", max_length=255)
+    page: int = Field(default=0, ge=0)
 
 
 
@@ -282,8 +297,9 @@ review_weak_concept: When the student answers a review prompt containing a
 memory id, call it with your correctness judgment.
 
 show_visualization: Call before the final answer when it would otherwise
-contain a formula, process diagram, graph, or other visual data. Follow all
-visualization rules below.
+contain a formula, process diagram, graph, or other visual data. Also call it
+with kind pdf when the student asks to see a referenced course PDF page. Follow
+all visualization rules below.
 
 # Evidence and source rules
 Base factual claims only on tool results. For PDF evidence, state filename and
@@ -304,6 +320,9 @@ show_visualization. Do not send the final conversational answer until that tool
 has succeeded. In the spoken answer, explain only what the visual means; never
 repeat its LaTeX, symbols, equation, or coordinates, even when quoting a PDF.
 Then explain it naturally with a reference such as '제가 보여드린 그림처럼'.
+For a PDF visualization, use the exact filename and page from a search result,
+the student's explicit request, or a prior assistant reference; never invent
+a file or page number.
 
 # Output format
 Use one to three short conversational sentences with no markdown lists. Never
@@ -466,15 +485,15 @@ TOOLS = [
                 "Show a safe visual reference instead of putting formulas, diagrams, "
                 "or graph coordinates in the spoken answer. Prefer calling this even "
                 "for one equation or variable relationship, and whenever visual support "
-                "might help. Use formula for LaTeX, "
-                "flow for ordered labeled steps, or plot for numeric x/y points."
+                "might help. Use formula for LaTeX, flow for ordered labeled steps, "
+                "plot for numeric x/y points, or pdf to show a referenced course PDF page."
             ),
             "strict": True,
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "Short Korean title."},
-                    "kind": {"type": "string", "enum": ["formula", "flow", "plot"]},
+                    "kind": {"type": "string", "enum": ["formula", "flow", "plot", "pdf"]},
                     "caption": {"type": "string", "description": "One concise Korean takeaway."},
                     "latex": {"type": "string", "description": "Raw LaTeX without dollar delimiters; empty unless kind is formula."},
                     "labels": {"type": "array", "items": {"type": "string"}, "description": "Ordered node labels; empty unless kind is flow."},
@@ -490,8 +509,10 @@ TOOLS = [
                     },
                     "x_label": {"type": "string", "description": "Plot x-axis label, otherwise empty."},
                     "y_label": {"type": "string", "description": "Plot y-axis label, otherwise empty."},
+                    "file": {"type": "string", "description": "Exact course PDF filename; empty unless kind is pdf."},
+                    "page": {"type": "integer", "minimum": 0, "description": "1-based PDF page; zero unless kind is pdf."},
                 },
-                "required": ["title", "kind", "caption", "latex", "labels", "points", "x_label", "y_label"],
+                "required": ["title", "kind", "caption", "latex", "labels", "points", "x_label", "y_label", "file", "page"],
                 "additionalProperties": False,
             },
         },
@@ -519,7 +540,7 @@ def _tool_log_value(value: object, limit: int = 600) -> str:
 
 
 def show_visualization(**args) -> str:
-    """Validate one formula, flow diagram, or numeric plot for the chat UI.
+    """Validate one formula, flow, plot, or course PDF page for the chat UI.
 
     Args:
         **args: Structured visualization fields from the model tool call.
@@ -534,6 +555,16 @@ def show_visualization(**args) -> str:
         raise ValueError("flow visualization requires at least two labels")
     if visualization.kind == "plot" and len(visualization.points) < 2:
         raise ValueError("plot visualization requires at least two points")
+    if visualization.kind == "pdf":
+        try:
+            pdf_path = get_course_material_path(visualization.file)
+            page_count = len(PdfReader(str(pdf_path)).pages)
+        except FileNotFoundError as exc:
+            raise ValueError("PDF course material not found") from exc
+        except Exception as exc:
+            raise ValueError("PDF course material could not be read") from exc
+        if visualization.page < 1 or visualization.page > page_count:
+            raise ValueError(f"PDF page must be between 1 and {page_count}")
     return _json(visualization.model_dump())
 
 

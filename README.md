@@ -11,7 +11,7 @@
 - 교수자 PDF 강의자료 업로드
 - 교수자 신뢰 사이트 추가·삭제
 - 학습자 텍스트 채팅과 핸즈프리 음성 대화
-- 수식·단계 도식·좌표 그래프 visualization 카드
+- 수식·단계 도식·좌표 그래프·강의자료 PDF 페이지 visualization 카드
 - 설명·소크라테스 답변 모드
 - 강의자료 PDF RAG와 파일명·페이지 출처
 - Moss 기반 취약 개념 저장·회상·간격 복습
@@ -42,10 +42,10 @@ uv run uvicorn server:app --port 8000
 | `search_trusted_web`      | PDF 근거가 부족할 때 허용 도메인만 검색    |
 | `save_weak_concept`       | 명시적 혼란이나 오답을 취약 개념으로 저장  |
 | `review_weak_concept`     | 복습 답변 결과에 따라 숙달 상태 갱신       |
-| `show_visualization`      | 수식·흐름·그래프를 채팅 참고자료로 표시    |
+| `show_visualization`      | 수식·흐름·그래프·PDF 페이지를 채팅에 표시  |
 
 텍스트와 음성 요청은 같은 brain과 tool dispatcher를 사용합니다. 모든 turn은 기억 회상과 강의자료 검색을 먼저 수행합니다.
-수학식이나 도식이 설명에 필요하면 TA는 내용을 그대로 읽지 않고 visualization tool을 호출한 뒤 “제가 보여드린 그림처럼”이라고 참조해 설명합니다.
+수학식이나 도식이 설명에 필요하면 TA는 내용을 그대로 읽지 않고 visualization tool을 호출한 뒤 “제가 보여드린 그림처럼”이라고 참조해 설명합니다. 사용자가 근거 강의자료 페이지를 요청하면 검증된 PDF 파일명과 페이지 번호로 해당 한 페이지만 채팅 안에 크게 표시합니다.
 
 ## API
 
@@ -56,6 +56,7 @@ uv run uvicorn server:app --port 8000
 | `POST`            | `/answer-text`       | 텍스트 질문과 답변 모드 전달; reply·tools·sources 반환 |
 | `WS`              | `/stream`            | 16kHz PCM 음성·모드 송수신                             |
 | `GET/POST`        | `/api/materials`     | 강의자료 조회·PDF 업로드                               |
+| `GET`             | `/api/materials/{filename}` | 업로드된 PDF를 브라우저에 inline 표시           |
 | `GET/POST/DELETE` | `/api/trusted-sites` | 신뢰 도메인 조회·추가·삭제                             |
 | `GET`             | `/review`            | 복습할 취약 개념 조회                                  |
 | `POST`            | `/reset`             | 현재 대화 이력 초기화                                  |
