@@ -45,10 +45,10 @@ DEFAULT_TRUSTED_WEB_DOMAINS = (
     "arxiv.org",
     "aclanthology.org",
     "proceedings.neurips.cc",
-    "jmlr.org",
     "wikipedia.org",
 )
 TRUSTED_SITES_FILE = BASE_DIR / "trusted-sites.json"
+MAX_TRUSTED_WEB_DOMAINS = 5
 MAX_MATERIAL_BYTES = 25 * 1024 * 1024
 PDF_MAX_RESULTS = 3
 PDF_PAGE_CACHE: list[dict] | None = None
@@ -139,6 +139,13 @@ def _trusted_domain(value: str) -> str:
     return domain
 
 
+def _trusted_domains(values: list[str] | tuple[str, ...]) -> list[str]:
+    domains = sorted({_trusted_domain(value) for value in values})
+    if len(domains) > MAX_TRUSTED_WEB_DOMAINS:
+        raise ValueError(f"at most {MAX_TRUSTED_WEB_DOMAINS} trusted sites are allowed")
+    return domains
+
+
 def get_trusted_domains() -> list[str]:
     """Load current professor-managed trusted domains.
 
@@ -146,13 +153,13 @@ def get_trusted_domains() -> list[str]:
         Sorted unique domain allowlist.
     """
     if not TRUSTED_SITES_FILE.exists():
-        return sorted(DEFAULT_TRUSTED_WEB_DOMAINS)
+        return _trusted_domains(DEFAULT_TRUSTED_WEB_DOMAINS)
     try:
         values = json.loads(TRUSTED_SITES_FILE.read_text(encoding="utf-8"))
-        return sorted({_trusted_domain(value) for value in values})
+        return _trusted_domains(values)
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         log.exception("failed to load trusted sites; using defaults")
-        return sorted(DEFAULT_TRUSTED_WEB_DOMAINS)
+        return _trusted_domains(DEFAULT_TRUSTED_WEB_DOMAINS)
 
 
 def _save_trusted_domains(domains: list[str]) -> None:
@@ -165,7 +172,7 @@ def _save_trusted_domains(domains: list[str]) -> None:
         None.
     """
     TRUSTED_SITES_FILE.write_text(
-        json.dumps(sorted(set(domains)), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(_trusted_domains(domains), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -180,7 +187,10 @@ def add_trusted_domain(value: str) -> list[str]:
         Updated sorted domain allowlist.
     """
     domains = set(get_trusted_domains())
-    domains.add(_trusted_domain(value))
+    domain = _trusted_domain(value)
+    if domain not in domains and len(domains) >= MAX_TRUSTED_WEB_DOMAINS:
+        raise ValueError(f"at most {MAX_TRUSTED_WEB_DOMAINS} trusted sites are allowed")
+    domains.add(domain)
     result = sorted(domains)
     _save_trusted_domains(result)
     return result

@@ -189,11 +189,22 @@ class MvpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(
             brain, "TRUSTED_SITES_FILE", Path(directory) / "trusted-sites.json"
         ):
+            brain.remove_trusted_domain("arxiv.org")
             sites = brain.add_trusted_domain("https://KOSIS.kr/statHtml")
             self.assertIn("kosis.kr", sites)
             self.assertNotIn("kosis.kr", brain.remove_trusted_domain("kosis.kr"))
             with self.assertRaises(ValueError):
                 brain.add_trusted_domain("not-a-domain")
+
+    def test_professor_cannot_add_more_sites_than_xai_supports(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            brain, "TRUSTED_SITES_FILE", Path(directory) / "trusted-sites.json"
+        ):
+            self.assertEqual(len(brain.get_trusted_domains()), brain.MAX_TRUSTED_WEB_DOMAINS)
+            with self.assertRaisesRegex(ValueError, "at most 5 trusted sites"):
+                brain.add_trusted_domain("kosis.kr")
+
+            self.assertFalse(brain.TRUSTED_SITES_FILE.exists())
 
     def test_wikipedia_is_a_default_trusted_site(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(
@@ -208,6 +219,36 @@ class MvpTests(unittest.TestCase):
                 brain._trusted_urls(response),
                 ["https://ko.wikipedia.org/wiki/시계열"],
             )
+
+    def test_web_search_sends_at_most_five_allowed_domains(self) -> None:
+        calls = []
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                model_dump=lambda: {"source": "https://ko.wikipedia.org/wiki/시계열"},
+                output_text="시계열은 시간 순서로 관측한 자료예요.",
+            )
+
+        client = SimpleNamespace(responses=SimpleNamespace(create=create))
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(brain, "xai_client", return_value=client),
+            patch.object(brain, "TRUSTED_SITES_FILE", Path(directory) / "trusted-sites.json"),
+            patch.object(brain, "WEB_SEARCH_LOG", Path(directory) / "web-search.jsonl"),
+        ):
+            result = json.loads(
+                brain.search_trusted_web(
+                    "시계열이란?",
+                    pdf_evidence_insufficient=True,
+                    reason="강의자료에 정의가 없음",
+                )
+            )
+
+        allowed_domains = calls[0]["tools"][0]["filters"]["allowed_domains"]
+        self.assertEqual(len(allowed_domains), brain.MAX_TRUSTED_WEB_DOMAINS)
+        self.assertEqual(allowed_domains, brain.get_trusted_domains())
+        self.assertTrue(result["found"])
 
     def test_text_chat_forwards_selected_mode(self) -> None:
         mocked = AsyncMock(return_value=("풀이", ["search_course_materials"], ["https://example.com/lesson"], []))

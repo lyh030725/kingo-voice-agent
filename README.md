@@ -57,7 +57,7 @@ uv run uvicorn server:app --port 8000
 | `WS`              | `/stream`            | 16kHz PCM 음성·모드 송수신                             |
 | `GET/POST`        | `/api/materials`     | 강의자료 조회·PDF 업로드                               |
 | `GET`             | `/api/materials/{filename}` | 업로드된 PDF를 브라우저에 inline 표시           |
-| `GET/POST/DELETE` | `/api/trusted-sites` | 신뢰 도메인 조회·추가·삭제                             |
+| `GET/POST/DELETE` | `/api/trusted-sites` | 신뢰 도메인 조회·추가·삭제(최대 5개)                   |
 | `GET`             | `/review`            | 복습할 취약 개념 조회                                  |
 | `POST`            | `/reset`             | 현재 대화 이력 초기화                                  |
 
