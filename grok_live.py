@@ -53,6 +53,7 @@ class GrokTransport(Transport):
         self._response_active = False
         self._discard_response_output = False
         self._conversation: list[dict[str, str]] = []
+        self._assessment_scheduled = False
 
     async def start(self) -> None:
         key = os.environ.get("XAI_API_KEY", "").strip()
@@ -129,6 +130,7 @@ class GrokTransport(Transport):
                     self._response_done = False
                     self._response_active = True
                     self._discard_response_output = False
+                    self._assessment_scheduled = False
                 elif kind == "input_audio_buffer.speech_started":
                     yield UserStartedSpeaking()
                     if self._response_active:
@@ -197,6 +199,8 @@ class GrokTransport(Transport):
                     if transcript and transcript != self._last_user_transcript:
                         self._last_user_transcript = transcript
                         yield Transcript("user", transcript)
+                        if self._response_done:
+                            self._schedule_assessment()
                 elif kind.endswith("output_audio_transcript.done"):
                     self._response_transcript = event.get("transcript") or self._response_transcript
                     if self._response_done and self._response_transcript and not self._response_transcript_emitted:
@@ -225,9 +229,16 @@ class GrokTransport(Transport):
         await self._ws.send(json.dumps(payload))
 
     def _schedule_assessment(self) -> None:
+        if self._assessment_scheduled:
+            return
         user = self._last_user_transcript.strip()
         assistant = self._response_transcript.strip()
         if not user or not assistant:
+            log.warning(
+                "external brain not scheduled for realtime turn: user_transcript=%s assistant_transcript=%s",
+                bool(user),
+                bool(assistant),
+            )
             return
         self._conversation.extend([
             {"role": "user", "content": user},
@@ -235,7 +246,8 @@ class GrokTransport(Transport):
         ])
         if len(self._conversation) > MAX_HISTORY_MESSAGES:
             del self._conversation[:-MAX_HISTORY_MESSAGES]
-        EXTERNAL_BRAIN.schedule(self._conversation)
+        EXTERNAL_BRAIN.schedule(self._conversation, source="realtime")
+        self._assessment_scheduled = True
         self._last_user_transcript = ""
 
 

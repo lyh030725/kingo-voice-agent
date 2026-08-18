@@ -64,7 +64,7 @@ class ExternalBrainTests(unittest.TestCase):
         async def scenario() -> None:
             gate = asyncio.Event()
 
-            async def wait_for_gate(_context) -> None:
+            async def wait_for_gate(_context, **_kwargs) -> None:
                 await gate.wait()
 
             external.assess = wait_for_gate
@@ -74,6 +74,35 @@ class ExternalBrainTests(unittest.TestCase):
             gate.set()
             await external.flush()
             self.assertTrue(task.done())
+
+        asyncio.run(scenario())
+
+    def test_logs_show_end_to_end_assessment_lifecycle(self) -> None:
+        memory = SimpleNamespace(
+            all_memories=AsyncMock(return_value=[]),
+            save=AsyncMock(),
+            review=AsyncMock(),
+        )
+        completion = Mock(return_value=SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='{"save": null, "reviews": []}')
+        )]))
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion)))
+        external = ExternalBrain(memory, lambda: client)
+
+        async def scenario() -> None:
+            with self.assertLogs("external-brain", level="INFO") as logs:
+                external.schedule([
+                    {"role": "user", "content": "정상성을 이해했어요"},
+                    {"role": "assistant", "content": "이유를 설명해 볼까요?"},
+                ], source="realtime")
+                await external.flush()
+            output = "\n".join(logs.output)
+            self.assertIn("external brain scheduled id=", output)
+            self.assertIn("source=realtime", output)
+            self.assertIn("external brain context ready id=", output)
+            self.assertIn("external brain decided id=", output)
+            self.assertIn("external brain completed id=", output)
+            self.assertIn("saved=0 reviewed=0", output)
 
         asyncio.run(scenario())
 

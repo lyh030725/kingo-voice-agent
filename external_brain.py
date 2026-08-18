@@ -6,12 +6,16 @@ import asyncio
 import json
 import logging
 import os
+import time
+from itertools import count
 from collections.abc import Callable
 from typing import Any
 
 from moss_memory import MossMemoryStore
 
 log = logging.getLogger("external-brain")
+_ASSESSMENT_IDS = count(1)
+LOG_PREVIEW_LIMIT = 180
 
 SYSTEM_PROMPT = """
 당신은 음성 튜터와 분리된 학습 진단 모델입니다. 매 턴이 끝난 뒤 최근 전체
@@ -53,12 +57,27 @@ class ExternalBrain:
         self._tasks: set[asyncio.Task[None]] = set()
         self._lock = asyncio.Lock()
 
-    def schedule(self, conversation: list[dict[str, str]]) -> asyncio.Task[None] | None:
+    def schedule(
+        self,
+        conversation: list[dict[str, str]],
+        *,
+        source: str = "unknown",
+    ) -> asyncio.Task[None] | None:
         """Start assessment without delaying the user-facing response."""
         if not conversation:
+            log.warning("external brain skipped source=%s reason=empty_conversation", source)
             return None
         snapshot = [dict(message) for message in conversation]
-        task = asyncio.create_task(self.assess(snapshot))
+        assessment_id = next(_ASSESSMENT_IDS)
+        log.info(
+            "external brain scheduled id=%s source=%s messages=%s user=%s assistant=%s",
+            assessment_id,
+            source,
+            len(snapshot),
+            _last_preview(snapshot, "user"),
+            _last_preview(snapshot, "assistant"),
+        )
+        task = asyncio.create_task(self.assess(snapshot, assessment_id=assessment_id, source=source))
         self._tasks.add(task)
         task.add_done_callback(self._task_done)
         return task
@@ -72,12 +91,51 @@ class ExternalBrain:
         except Exception:
             log.exception("background weak-concept assessment failed")
 
-    async def assess(self, conversation: list[dict[str, str]]) -> None:
+    async def assess(
+        self,
+        conversation: list[dict[str, str]],
+        *,
+        assessment_id: int = 0,
+        source: str = "test",
+    ) -> None:
         """Ask text Grok to assess context, then persist validated decisions."""
+        started_at = time.perf_counter()
+        log.info(
+            "external brain started id=%s source=%s messages=%s",
+            assessment_id,
+            source,
+            len(conversation),
+        )
         async with self._lock:
             memories = await self.memory.all_memories()
+            log.info(
+                "external brain context ready id=%s stored_concepts=%s",
+                assessment_id,
+                len(memories),
+            )
             decision = await asyncio.to_thread(self._decide, conversation, memories)
-            await self._apply(decision, memories)
+            save = decision.get("save")
+            reviews = decision.get("reviews", [])
+            if not isinstance(reviews, list):
+                reviews = []
+                decision["reviews"] = reviews
+            log.info(
+                "external brain decided id=%s save=%s concept=%s reviews=%s",
+                assessment_id,
+                isinstance(save, dict),
+                _preview(str(save.get("concept", ""))) if isinstance(save, dict) else "-",
+                len(reviews),
+            )
+            saved, reviewed = await self._apply(decision, memories)
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+        log.info(
+            "external brain completed id=%s source=%s saved=%s reviewed=%s elapsed_ms=%s",
+            assessment_id,
+            source,
+            saved,
+            reviewed,
+            elapsed_ms,
+        )
 
     def _decide(self, conversation: list[dict[str, str]], memories: list[dict]) -> dict:
         payload = {
@@ -109,8 +167,10 @@ class ExternalBrain:
             raise ValueError("external brain response must be a JSON object")
         return decision
 
-    async def _apply(self, decision: dict, memories: list[dict]) -> None:
+    async def _apply(self, decision: dict, memories: list[dict]) -> tuple[int, int]:
         known_ids = {item.get("id") for item in memories if item.get("id")}
+        saved = 0
+        reviewed = 0
         save = decision.get("save")
         if isinstance(save, dict):
             concept = str(save.get("concept", "")).strip()
@@ -123,6 +183,7 @@ class ExternalBrain:
                     question,
                     note,
                 )
+                saved = 1
                 log.info("weak-concept save decision applied: %s", result)
             else:
                 log.warning("ignored invalid or non-Korean weak-concept save decision")
@@ -137,7 +198,9 @@ class ExternalBrain:
                 continue
             seen.add(memory_id)
             result = await self.memory.review(memory_id, correct)
+            reviewed += 1
             log.info("weak-concept review decision applied: %s", result)
+        return saved, reviewed
 
     async def flush(self) -> None:
         """Wait for all currently scheduled assessments."""
@@ -147,3 +210,15 @@ class ExternalBrain:
 
 def _contains_korean(value: str) -> bool:
     return any("가" <= character <= "힣" for character in value)
+
+
+def _preview(value: str) -> str:
+    compact = " ".join(value.split())
+    return compact if len(compact) <= LOG_PREVIEW_LIMIT else compact[:LOG_PREVIEW_LIMIT] + "…"
+
+
+def _last_preview(conversation: list[dict[str, str]], role: str) -> str:
+    for message in reversed(conversation):
+        if message.get("role") == role:
+            return _preview(str(message.get("content", "")))
+    return "-"

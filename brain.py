@@ -894,7 +894,7 @@ async def think(
                 reply_text = _for_speech(reply_text)
 
             _append_history({"role": "assistant", "content": reply_text})
-            EXTERNAL_BRAIN.schedule(HISTORY)
+            EXTERNAL_BRAIN.schedule(HISTORY, source="text")
             return reply_text, tools_used, external_sources[:3], visualizations
 
         tool_messages.append({

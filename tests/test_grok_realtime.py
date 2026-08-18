@@ -37,6 +37,49 @@ class FakeSocket:
 
 
 class GrokRealtimeTests(unittest.TestCase):
+    def test_completed_voice_turn_sends_user_and_agent_context_to_external_brain(self) -> None:
+        async def scenario() -> None:
+            transport = GrokTransport()
+            transport._ws = FakeSocket([
+                {"type": "conversation.item.input_audio_transcription.completed", "transcript": "차분하면 왜 정상성이 생기나요?"},
+                {"type": "response.created"},
+                {"type": "response.output_audio_transcript.done", "transcript": "추세가 어떻게 변하는지 생각해 볼까요?"},
+                {"type": "response.done"},
+            ])
+            transport._connected.set()
+
+            with patch("grok_live.EXTERNAL_BRAIN.schedule") as schedule:
+                events = [event async for event in transport.events()]
+
+            self.assertIn(AgentTurnDone(), events)
+            schedule.assert_called_once_with([
+                {"role": "user", "content": "차분하면 왜 정상성이 생기나요?"},
+                {"role": "assistant", "content": "추세가 어떻게 변하는지 생각해 볼까요?"},
+            ], source="realtime")
+
+        asyncio.run(scenario())
+
+    def test_late_user_transcript_still_schedules_exactly_once(self) -> None:
+        async def scenario() -> None:
+            transport = GrokTransport()
+            transport._ws = FakeSocket([
+                {"type": "response.created"},
+                {"type": "response.output_audio_transcript.done", "transcript": "차분의 효과를 말해볼까요?"},
+                {"type": "response.done"},
+                {"type": "conversation.item.input_audio_transcription.completed", "transcript": "차분이 뭐예요?"},
+            ])
+            transport._connected.set()
+
+            with patch("grok_live.EXTERNAL_BRAIN.schedule") as schedule:
+                _events = [event async for event in transport.events()]
+
+            schedule.assert_called_once_with([
+                {"role": "user", "content": "차분이 뭐예요?"},
+                {"role": "assistant", "content": "차분의 효과를 말해볼까요?"},
+            ], source="realtime")
+
+        asyncio.run(scenario())
+
     def test_filler_instruction_is_voice_only(self) -> None:
         self.assertIn("Immediately before the first tool call", agent_spec.persona("socratic"))
         self.assertNotIn("Voice-only filler", agent_spec.SYSTEM_PROMPT)
