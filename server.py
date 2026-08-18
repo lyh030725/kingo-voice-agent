@@ -30,6 +30,7 @@ from brain import (
     add_trusted_domain,
     get_course_material_path,
     get_trusted_domains,
+    list_weak_concepts,
     list_course_materials,
     next_review_prompt,
     remove_course_material,
@@ -524,6 +525,12 @@ async def review() -> dict:
         Due flag and optional weak-concept question.
     """
     return await next_review_prompt()
+
+
+@app.get("/api/weak-concepts")
+async def weak_concepts() -> dict:
+    """List the current learner's weak concepts and mastery percentages."""
+    return {"concepts": await list_weak_concepts()}
 
 
 

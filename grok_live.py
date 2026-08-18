@@ -12,6 +12,7 @@ from typing import AsyncIterator
 import websockets
 
 import agent_spec
+from brain import EXTERNAL_BRAIN, MAX_HISTORY_MESSAGES
 from transport import (
     AGENT_RATE,
     CALLER_RATE,
@@ -51,6 +52,7 @@ class GrokTransport(Transport):
         self._last_user_transcript = ""
         self._response_active = False
         self._discard_response_output = False
+        self._conversation: list[dict[str, str]] = []
 
     async def start(self) -> None:
         key = os.environ.get("XAI_API_KEY", "").strip()
@@ -99,6 +101,7 @@ class GrokTransport(Transport):
 
     async def send_text(self, text: str) -> None:
         if self._ws is not None and not self._closed:
+            self._last_user_transcript = text.strip()
             await self._send({
                 "type": "conversation.item.create",
                 "item": {
@@ -184,6 +187,7 @@ class GrokTransport(Transport):
                         if self._response_transcript and not self._response_transcript_emitted:
                             yield Transcript("agent", self._response_transcript)
                             self._response_transcript_emitted = True
+                        self._schedule_assessment()
                         yield AgentTurnDone()
                 elif kind in {
                     "conversation.item.input_audio_transcription.updated",
@@ -219,6 +223,20 @@ class GrokTransport(Transport):
     async def _send(self, payload: dict) -> None:
         assert self._ws is not None
         await self._ws.send(json.dumps(payload))
+
+    def _schedule_assessment(self) -> None:
+        user = self._last_user_transcript.strip()
+        assistant = self._response_transcript.strip()
+        if not user or not assistant:
+            return
+        self._conversation.extend([
+            {"role": "user", "content": user},
+            {"role": "assistant", "content": assistant},
+        ])
+        if len(self._conversation) > MAX_HISTORY_MESSAGES:
+            del self._conversation[:-MAX_HISTORY_MESSAGES]
+        EXTERNAL_BRAIN.schedule(self._conversation)
+        self._last_user_transcript = ""
 
 
 def _transcript_from_response(event: dict) -> str:

@@ -40,11 +40,10 @@ uv run uvicorn server:app --port 8000
 | `recall_weak_concepts`    | 현재 질문과 관련된 학습자의 취약 개념 회상 |
 | `search_course_materials` | 교수자가 업로드한 PDF에서 근거 검색        |
 | `search_trusted_web`      | PDF 근거가 부족할 때 허용 도메인만 검색    |
-| `save_weak_concept`       | 명시적 혼란이나 오답을 취약 개념으로 저장  |
-| `review_weak_concept`     | 복습 답변 결과에 따라 숙달 상태 갱신       |
 | `show_visualization`      | 수식·흐름·그래프·PDF 페이지를 채팅에 표시  |
 
 텍스트와 음성 요청은 같은 brain과 tool dispatcher를 사용합니다. 모든 turn은 기억 회상과 강의자료 검색을 먼저 수행합니다.
+`save_weak_concept`와 `review_weak_concept` 판단은 음성 모델의 tool에서 분리되어, 매 turn 종료 뒤 text Grok External Brain이 최근 대화 맥락과 기존 기억을 검토하는 백그라운드 작업으로 실행합니다. 의미상 중복된 개념은 저장하지 않고, 현재 주제를 실제로 따라간 증거가 있는 기존 개념만 이해도를 갱신합니다.
 수학식이나 도식이 설명에 필요하면 TA는 내용을 그대로 읽지 않고 visualization tool을 호출한 뒤 “제가 보여드린 그림처럼”이라고 참조해 설명합니다. 사용자가 근거 강의자료 페이지를 요청하면 검증된 PDF 파일명과 페이지 번호로 해당 한 페이지만 채팅 안에 크게 표시합니다.
 
 ## API

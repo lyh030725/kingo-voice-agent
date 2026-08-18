@@ -366,6 +366,20 @@ button { cursor: pointer; }
   .visualization-flow { flex-direction: column; align-items: stretch; }
   .visualization-arrow { align-self: center; transform: rotate(90deg); }
 }
+
+.student-tabs { display: flex; gap: 8px; margin: 18px 0; border-bottom: 1px solid #d8dee8; }
+.student-tab { border: 0; border-bottom: 3px solid transparent; background: transparent; color: #556274; padding: 10px 14px; font-weight: 700; cursor: pointer; }
+.student-tab.active { color: #0f6b52; border-bottom-color: #0f6b52; }
+.weak-concept-list { display: grid; gap: 14px; padding: 18px; }
+.weak-concept { border: 1px solid #dfe5ec; border-radius: 12px; padding: 16px; background: #fff; }
+.weak-concept-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.weak-concept h3 { margin: 0; font-size: 16px; }
+.weak-concept-note { margin: 8px 0 14px; color: #5d6878; line-height: 1.5; }
+.mastery-row { display: flex; align-items: center; gap: 12px; }
+.mastery-track { height: 10px; flex: 1; overflow: hidden; border-radius: 999px; background: #e8edf2; }
+.mastery-fill { height: 100%; border-radius: inherit; background: #14805f; transition: width .3s ease; }
+.mastery-value { min-width: 42px; color: #0f6b52; font-weight: 800; text-align: right; }
+.weak-empty { padding: 42px 20px; color: #687487; text-align: center; }
 </style>
 </head>
 <body>
@@ -422,6 +436,12 @@ button { cursor: pointer; }
         </div>
         <div class="notice">AI 답변은 강의자료의 파일명과 페이지를 근거로 제공합니다. 중요한 내용은 담당 교수자의 안내와 원문을 함께 확인하세요.</div>
 
+        <div class="student-tabs" role="tablist" aria-label="학습자 메뉴">
+          <button id="chat-tab" class="student-tab active" type="button" role="tab" aria-selected="true" aria-controls="chat-panel">AI 조교</button>
+          <button id="weak-concepts-tab" class="student-tab" type="button" role="tab" aria-selected="false" aria-controls="weak-concepts-panel">취약 개념</button>
+        </div>
+
+        <div id="chat-panel" role="tabpanel" aria-labelledby="chat-tab">
         <div class="mode-grid" role="radiogroup" aria-label="챗봇 답변 모드">
           <button class="mode" data-mode="explain" type="button" role="radio" aria-checked="false"><strong>설명 모드</strong><small>개념과 예시를 직접 설명하고 이해를 확인합니다.</small></button>
           <button class="mode active" data-mode="socratic" type="button" role="radio" aria-checked="true"><strong>소크라테스 모드</strong><small>질문과 단계별 힌트로 스스로 답을 찾게 합니다.</small></button>
@@ -452,6 +472,12 @@ button { cursor: pointer; }
           </aside>
         </div>
         <audio id="player"></audio>
+        </div>
+
+        <section id="weak-concepts-panel" class="card" role="tabpanel" aria-labelledby="weak-concepts-tab" hidden>
+          <div class="card-head"><h2>나의 취약 개념</h2><small>정답 평가에 따라 이해도가 올라갑니다</small></div>
+          <div id="weak-concept-list" class="weak-concept-list" aria-live="polite"></div>
+        </section>
       </section>
 
       <section id="teacher-screen" class="screen" hidden>
@@ -524,6 +550,78 @@ function setRole(role) {
 }
 byId("student-toggle").addEventListener("click", () => setRole("student"));
 byId("teacher-toggle").addEventListener("click", () => setRole("teacher"));
+
+function selectStudentTab(tab) {
+  const weak = tab === "weak-concepts";
+  byId("chat-panel").hidden = weak;
+  byId("weak-concepts-panel").hidden = !weak;
+  byId("chat-tab").classList.toggle("active", !weak);
+  byId("weak-concepts-tab").classList.toggle("active", weak);
+  byId("chat-tab").setAttribute("aria-selected", String(!weak));
+  byId("weak-concepts-tab").setAttribute("aria-selected", String(weak));
+  if (weak) loadWeakConcepts();
+}
+byId("chat-tab").addEventListener("click", () => selectStudentTab("chat"));
+byId("weak-concepts-tab").addEventListener("click", () => selectStudentTab("weak-concepts"));
+
+async function loadWeakConcepts() {
+  const list = byId("weak-concept-list");
+  list.textContent = "취약 개념을 불러오는 중입니다.";
+  try {
+    const response = await fetch("/api/weak-concepts", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "취약 개념을 불러오지 못했습니다.");
+    renderWeakConcepts(data.concepts || []);
+  } catch (error) {
+    list.textContent = error.message;
+  }
+}
+
+function renderWeakConcepts(concepts) {
+  const list = byId("weak-concept-list");
+  list.replaceChildren();
+  if (!concepts.length) {
+    const empty = document.createElement("div");
+    empty.className = "weak-empty";
+    empty.textContent = "아직 저장된 취약 개념이 없습니다.";
+    list.appendChild(empty);
+    return;
+  }
+  concepts.forEach((concept) => {
+    const item = document.createElement("article");
+    item.className = "weak-concept";
+    const head = document.createElement("div");
+    head.className = "weak-concept-head";
+    const title = document.createElement("h3");
+    title.textContent = concept.concept;
+    const status = document.createElement("span");
+    status.className = "term-badge";
+    status.textContent = concept.status === "mastered" ? "학습 완료" : "학습 중";
+    head.append(title, status);
+    const note = document.createElement("p");
+    note.className = "weak-concept-note";
+    note.textContent = concept.difficulty_note;
+    const mastery = document.createElement("div");
+    mastery.className = "mastery-row";
+    const track = document.createElement("div");
+    track.className = "mastery-track";
+    track.setAttribute("role", "progressbar");
+    track.setAttribute("aria-label", concept.concept + " 이해도");
+    track.setAttribute("aria-valuemin", "0");
+    track.setAttribute("aria-valuemax", "100");
+    track.setAttribute("aria-valuenow", String(concept.mastery_percent));
+    const fill = document.createElement("div");
+    fill.className = "mastery-fill";
+    fill.style.width = concept.mastery_percent + "%";
+    const value = document.createElement("span");
+    value.className = "mastery-value";
+    value.textContent = concept.mastery_percent + "%";
+    track.appendChild(fill);
+    mastery.append(track, value);
+    item.append(head, note, mastery);
+    list.appendChild(item);
+  });
+}
 
 const modeLabels = { explain: "설명 모드", socratic: "소크라테스 모드" };
 document.querySelectorAll(".mode").forEach((button) => {

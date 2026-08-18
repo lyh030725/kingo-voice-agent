@@ -25,6 +25,7 @@ from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageFuncti
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
+from external_brain import ExternalBrain
 from moss_memory import MossMemoryStore
 
 if os.environ.get("VOICE_AI_SKIP_DOTENV") != "1":
@@ -228,6 +229,9 @@ def xai_client() -> OpenAI:
     )
 
 
+EXTERNAL_BRAIN = ExternalBrain(MOSS_MEMORY, xai_client)
+
+
 class StageTimer:
     def __init__(self) -> None:
         self.timings_ms: dict[str, int] = {}
@@ -299,13 +303,6 @@ PDFs for evidence. Call it together with recall_weak_concepts.
 
 search_trusted_web: Call only when PDF evidence is missing or insufficient.
 
-save_weak_concept: Call only when you judge that the student shows explicit
-confusion, gives an incorrect answer, or gives an incomplete explanation.
-Ordinary questions are not weaknesses.
-
-review_weak_concept: When the student answers a review prompt containing a
-memory id, call it with your correctness judgment.
-
 show_visualization: Call before the final answer when it would otherwise
 contain a formula, process diagram, graph, or other visual data. Also call it
 with kind pdf when the student asks to see a referenced course PDF page. Follow
@@ -345,8 +342,17 @@ MODE_PROMPTS = {
         "one concrete example, then ask one short understanding-check question."
     ),
     "socratic": (
-        "Socratic mode: do not reveal the final answer first. Ask one focused "
-        "question or give one progressive hint that makes the student reason."
+        """
+Socratic mode:
+Help the student derive the answer instead of explaining it.
+
+- *DO NOT* reveal the answer before the student reaches it.
+- Ask exactly one short question at a time.
+- If partly correct, confirm only that part and ask the next question.
+- If wrong or stuck, give only a small hint and make the question easier.
+- Explain directly only when the student explicitly asks for the answer.
+- Maximum two short spoken sentences.
+"""
     ),
 }
 
@@ -418,71 +424,6 @@ TOOLS = [
                     },
                 },
                 "required": ["query", "reason"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "save_weak_concept",
-            "description": (
-                "Save a weak concept only after confusion, an incorrect answer, "
-                "or an incomplete explanation. Do not save ordinary questions."
-            ),
-            "strict": True,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "course": {
-                        "type": "string",
-                        "description": "Course containing the weak concept.",
-                    },
-                    "concept": {
-                        "type": "string",
-                        "description": "Concise weak-concept label.",
-                    },
-                    "original_question": {
-                        "type": "string",
-                        "description": "Student question exposing the weakness.",
-                    },
-                    "difficulty_note": {
-                        "type": "string",
-                        "description": "Observed misunderstanding or missing prerequisite.",
-                    },
-                },
-                "required": [
-                    "course",
-                    "concept",
-                    "original_question",
-                    "difficulty_note",
-                ],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "review_weak_concept",
-            "description": (
-                "Update spaced-repetition state when the student answers a "
-                "review question containing a memory id."
-            ),
-            "strict": True,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "memory_id": {
-                        "type": "string",
-                        "description": "Weak-concept memory id from the review prompt.",
-                    },
-                    "correct": {
-                        "type": "boolean",
-                        "description": "Whether the student explanation is correct.",
-                    },
-                },
-                "required": ["memory_id", "correct"],
                 "additionalProperties": False,
             },
         },
@@ -576,33 +517,6 @@ def show_visualization(**args) -> str:
         if visualization.page < 1 or visualization.page > page_count:
             raise ValueError(f"PDF page must be between 1 and {page_count}")
     return _json(visualization.model_dump())
-
-
-async def save_weak_concept(
-    course: str,
-    concept: str,
-    original_question: str,
-    difficulty_note: str,
-) -> str:
-    """Store one weak concept and queue cloud sync.
-
-    Args:
-        course: Course name containing the concept.
-        concept: Concise weak-concept label.
-        original_question: Question that exposed the weakness.
-        difficulty_note: Observed misunderstanding.
-
-    Returns:
-        JSON string with memory id and status.
-    """
-    return _json(
-        await MOSS_MEMORY.save(
-            course=course,
-            concept=concept,
-            original_question=original_question,
-            difficulty_note=difficulty_note,
-        )
-    )
 
 
 def _terms(text: str) -> set[str]:
@@ -787,20 +701,6 @@ def search_trusted_web(
     )
 
 
-# --------------------------------------------------------------------------
-async def review_weak_concept(memory_id: str, correct: bool) -> str:
-    """Update one weak concept after a review answer.
-
-    Args:
-        memory_id: Stored Moss memory identifier.
-        correct: Whether the student explanation is correct.
-
-    Returns:
-        JSON string containing updated review status.
-    """
-    return _json(await MOSS_MEMORY.review(memory_id, correct))
-
-
 async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
     """Dispatch one validated function tool call.
 
@@ -817,8 +717,6 @@ async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
         "recall_weak_concepts": "recall",
         "search_course_materials": "pdf",
         "search_trusted_web": "web",
-        "save_weak_concept": "save",
-        "review_weak_concept": "review",
         "show_visualization": "visual",
     }.get(name, "tool")
     log.info("tool call name=%s args=%s", name, _tool_log_value(args))
@@ -833,10 +731,6 @@ async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
                 pdf_evidence_insufficient=True,
                 **args,
             )
-        elif name == "save_weak_concept":
-            result = await save_weak_concept(**args)
-        elif name == "review_weak_concept":
-            result = await review_weak_concept(**args)
         elif name == "show_visualization":
             result = show_visualization(**args)
         else:
@@ -1000,6 +894,7 @@ async def think(
                 reply_text = _for_speech(reply_text)
 
             _append_history({"role": "assistant", "content": reply_text})
+            EXTERNAL_BRAIN.schedule(HISTORY)
             return reply_text, tools_used, external_sources[:3], visualizations
 
         tool_messages.append({
@@ -1074,6 +969,35 @@ async def next_review_prompt() -> dict:
     }
 
 
+async def list_weak_concepts() -> list[dict]:
+    """Return learner-facing weak concepts with percentage mastery.
+
+    Returns:
+        Weak concepts ordered by most recently observed first.
+    """
+    memories = await MOSS_MEMORY.all_memories()
+    return [
+        {
+            "memory_id": memory.get("id", ""),
+            "course": memory.get("course", ""),
+            "concept": memory.get("concept", ""),
+            "difficulty_note": memory.get("difficulty_note", ""),
+            "status": memory.get("status", "new"),
+            "mastery_percent": round(
+                min(max(float(memory.get("confidence", 0)), 0), 1) * 100
+            ),
+            "success_count": int(memory.get("success_count", 0)),
+            "failure_count": int(memory.get("failure_count", 0)),
+            "last_seen_at": float(memory.get("last_seen_at", 0)),
+        }
+        for memory in sorted(
+            memories,
+            key=lambda item: float(item.get("last_seen_at", 0)),
+            reverse=True,
+        )
+    ]
+
+
 async def startup() -> None:
     tasks = [asyncio.to_thread(_pdf_pages)]
     if MOSS_MEMORY.is_configured:
@@ -1086,4 +1010,5 @@ async def startup() -> None:
 
 
 async def shutdown() -> None:
+    await EXTERNAL_BRAIN.flush()
     await MOSS_MEMORY.close()

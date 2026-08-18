@@ -20,6 +20,28 @@ import server
 
 
 class MvpTests(unittest.TestCase):
+    def test_weak_concept_tab_and_percentage_api_are_wired(self) -> None:
+        memories = [{
+            "id": "M-1",
+            "course": "시계열",
+            "concept": "정상성",
+            "difficulty_note": "추세와 정상성을 혼동함",
+            "status": "practicing",
+            "confidence": 2 / 3,
+            "success_count": 2,
+            "failure_count": 1,
+            "last_seen_at": 10,
+        }]
+
+        with patch.object(brain.MOSS_MEMORY, "all_memories", new=AsyncMock(return_value=memories)):
+            result = asyncio.run(server.weak_concepts())
+
+        self.assertEqual(result["concepts"][0]["mastery_percent"], 67)
+        page = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="weak-concepts-tab"', page)
+        self.assertIn('fetch("/api/weak-concepts", { cache: "no-store" })', page)
+        self.assertIn('fill.style.width = concept.mastery_percent + "%"', page)
+
     def test_system_prompt_prefers_spoken_korean(self) -> None:
         for heading in (
             "# Role",
@@ -34,8 +56,6 @@ class MvpTests(unittest.TestCase):
             "recall_weak_concepts",
             "search_course_materials",
             "search_trusted_web",
-            "save_weak_concept",
-            "review_weak_concept",
             "show_visualization",
         ):
             self.assertIn(f"{tool_name}:", brain.SYSTEM_PROMPT)
@@ -44,8 +64,6 @@ class MvpTests(unittest.TestCase):
         self.assertIn("At the start of every student turn", brain.SYSTEM_PROMPT)
         self.assertIn("Base factual claims only on tool results", brain.SYSTEM_PROMPT)
         self.assertIn("Return source URLs through the separate sources field", brain.SYSTEM_PROMPT)
-        self.assertIn("Ordinary questions are not weaknesses", brain.SYSTEM_PROMPT)
-        self.assertIn("memory id", brain.SYSTEM_PROMPT)
         self.assertIn("one to three short conversational sentences", brain.SYSTEM_PROMPT)
         self.assertIn("Never\nread raw JSON aloud", brain.SYSTEM_PROMPT)
         self.assertIn("polite 해요 style", brain.SYSTEM_PROMPT)

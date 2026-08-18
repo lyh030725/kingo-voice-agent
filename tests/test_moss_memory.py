@@ -86,6 +86,17 @@ class FakeClient:
 
 
 class MossMemoryStoreTests(unittest.TestCase):
+    def test_correct_reviews_advance_mastery_percentage(self):
+        memory = {"success_count": 0, "failure_count": 1}
+
+        MossMemoryStore._apply_review(memory, True, 1)
+        self.assertEqual(round(memory["confidence"] * 100), 33)
+        MossMemoryStore._apply_review(memory, True, 2)
+        self.assertEqual(round(memory["confidence"] * 100), 67)
+        MossMemoryStore._apply_review(memory, True, 3)
+        self.assertEqual(round(memory["confidence"] * 100), 100)
+        self.assertEqual(memory["status"], "mastered")
+
     def test_embed_deduplicate_recall_and_push(self):
         async def scenario(local_path):
             session = FakeSession()

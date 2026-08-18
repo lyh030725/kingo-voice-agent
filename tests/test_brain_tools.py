@@ -49,16 +49,6 @@ class FakeClient:
                     "query": "attention paper",
                     "reason": "PDF 설명이 불충분함",
                 }),
-                ToolCall("save", "save_weak_concept", {
-                    "course": "AI 개론",
-                    "concept": "Self-Attention",
-                    "original_question": "왜 곱해?",
-                    "difficulty_note": "유사도 의미가 불명확함",
-                }),
-                ToolCall("review", "review_weak_concept", {
-                    "memory_id": "M-test",
-                    "correct": True,
-                }),
                 ToolCall("visual", "show_visualization", {
                     "title": "Attention 가중치",
                     "kind": "formula",
@@ -116,16 +106,7 @@ class BrainToolTests(unittest.TestCase):
                     "sources": ["https://arxiv.org/abs/1706.03762"],
                 }),
             ) as web_search,
-            patch.object(
-                brain,
-                "save_weak_concept",
-                new=AsyncMock(return_value=json.dumps({"status": "saved"})),
-            ) as save,
-            patch.object(
-                brain,
-                "review_weak_concept",
-                new=AsyncMock(return_value=json.dumps({"status": "practicing"})),
-            ) as review,
+            patch.object(brain.EXTERNAL_BRAIN, "schedule") as schedule,
         ):
             reply, tools, sources, visualizations = asyncio.run(
                 brain.think("Query와 Key를 왜 곱해?", brain.StageTimer())
@@ -137,8 +118,6 @@ class BrainToolTests(unittest.TestCase):
                 "recall_weak_concepts",
                 "search_course_materials",
                 "search_trusted_web",
-                "save_weak_concept",
-                "review_weak_concept",
                 "show_visualization",
             },
         )
@@ -146,8 +125,6 @@ class BrainToolTests(unittest.TestCase):
             "recall_weak_concepts",
             "search_course_materials",
             "search_trusted_web",
-            "save_weak_concept",
-            "review_weak_concept",
             "show_visualization",
         })
         self.assertEqual(fake_client.calls[0]["tool_choice"], "required")
@@ -157,7 +134,7 @@ class BrainToolTests(unittest.TestCase):
         self.assertTrue(fake_client.calls[0]["parallel_tool_calls"])
         self.assertEqual(
             sum(message["role"] == "tool" for message in fake_client.calls[2]["messages"]),
-            6,
+            4,
         )
         recall.assert_awaited_once_with(topic="attention")
         course_search.assert_called_once_with(query="attention")
@@ -166,8 +143,7 @@ class BrainToolTests(unittest.TestCase):
             query="attention paper",
             reason="PDF 설명이 불충분함",
         )
-        save.assert_awaited_once()
-        review.assert_awaited_once_with(memory_id="M-test", correct=True)
+        schedule.assert_called_once()
         self.assertNotIn("https://arxiv.org/abs/1706.03762", reply)
         self.assertEqual(sources, ["https://arxiv.org/abs/1706.03762"])
         self.assertEqual(visualizations[0]["kind"], "formula")
@@ -199,13 +175,13 @@ class BrainToolTests(unittest.TestCase):
                 "search_course_materials",
                 return_value=json.dumps({"found": False, "results": []}),
             ),
-            patch.object(brain, "save_weak_concept", new=AsyncMock()) as save,
+            patch.object(brain.EXTERNAL_BRAIN, "schedule") as schedule,
         ):
             _reply, tools, _sources, _visualizations = asyncio.run(
                 brain.think("Self-Attention을 잘 모르겠어", brain.StageTimer())
             )
 
-        save.assert_not_awaited()
+        schedule.assert_called_once()
         self.assertNotIn("save_weak_concept", tools)
 
     def test_stream_completion_emits_each_text_delta(self) -> None:
@@ -316,11 +292,9 @@ class BrainToolTests(unittest.TestCase):
 
     def test_tool_docstrings_describe_contracts(self) -> None:
         for target in (
-            brain.save_weak_concept,
             brain.recall_weak_concepts,
             brain.search_course_materials,
             brain.search_trusted_web,
-            brain.review_weak_concept,
             brain.show_visualization,
             brain.run_tool,
         ):
