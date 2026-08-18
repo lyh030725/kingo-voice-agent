@@ -42,27 +42,30 @@ class MvpTests(unittest.TestCase):
         self.assertIn('fetch("/api/weak-concepts", { cache: "no-store" })', page)
         self.assertIn('fill.style.width = concept.mastery_percent + "%"', page)
 
-    def test_system_prompt_prefers_spoken_korean(self) -> None:
+    def test_system_prompt_uses_preloaded_context_and_only_optional_tools(self) -> None:
         for heading in (
             "# Role",
             "# Language and style",
+            "# Context",
             "# Tool usage",
             "# Evidence and source rules",
             "# Visualization rules",
             "# Output format",
         ):
             self.assertIn(heading, brain.SYSTEM_PROMPT)
-        for tool_name in (
-            "recall_weak_concepts",
-            "search_course_materials",
-            "search_trusted_web",
-            "show_visualization",
-        ):
+        for tool_name in ("search_trusted_web", "show_visualization"):
             self.assertIn(f"{tool_name}:", brain.SYSTEM_PROMPT)
+        self.assertNotIn("recall_weak_concepts", brain.SYSTEM_PROMPT)
+        self.assertNotIn("search_course_materials", brain.SYSTEM_PROMPT)
+        self.assertEqual(
+            {tool["function"]["name"] for tool in brain.TOOLS},
+            {"search_trusted_web", "show_visualization"},
+        )
         self.assertIn("Sungkyunkwan University student", brain.SYSTEM_PROMPT)
         self.assertIn("Speak in Korean unless asked otherwise", brain.SYSTEM_PROMPT)
-        self.assertIn("At the start of every student turn", brain.SYSTEM_PROMPT)
-        self.assertIn("Base factual claims only on tool results", brain.SYSTEM_PROMPT)
+        self.assertIn("server provides relevant learner-memory context", brain.SYSTEM_PROMPT)
+        self.assertIn("course-PDF evidence", brain.SYSTEM_PROMPT)
+        self.assertIn("Base factual claims only on the preloaded context", brain.SYSTEM_PROMPT)
         self.assertIn("Return source URLs through the separate sources field", brain.SYSTEM_PROMPT)
         self.assertIn("one to three short conversational sentences", brain.SYSTEM_PROMPT)
         self.assertIn("Never\nread raw JSON aloud", brain.SYSTEM_PROMPT)
@@ -73,7 +76,7 @@ class MvpTests(unittest.TestCase):
         self.assertIn("show_visualization first", brain.SYSTEM_PROMPT)
         self.assertIn("When unsure whether visual support is useful, prefer calling", brain.SYSTEM_PROMPT)
         self.assertIn("Do not send the final conversational answer until that tool", brain.SYSTEM_PROMPT)
-        self.assertIn("paraphrase any equation instead of quoting or reading it", brain.SYSTEM_PROMPT)
+        self.assertIn("paraphrase any equation instead of", brain.SYSTEM_PROMPT)
         self.assertIn("repeat its LaTeX, symbols, equation, or coordinates", brain.SYSTEM_PROMPT)
         self.assertIn("제가 보여드린 그림처럼", brain.SYSTEM_PROMPT)
 
@@ -269,7 +272,7 @@ class MvpTests(unittest.TestCase):
         self.assertTrue(result["found"])
 
     def test_text_chat_forwards_selected_mode(self) -> None:
-        mocked = AsyncMock(return_value=("풀이", ["search_course_materials"], ["https://example.com/lesson"], []))
+        mocked = AsyncMock(return_value=("풀이", [], ["https://example.com/lesson"], []))
         with patch.object(server, "think", mocked):
             result = asyncio.run(
                 server.answer_text(brain.TextQuestion(text="ARIMA를 풀어줘", mode="explain"))
@@ -280,7 +283,6 @@ class MvpTests(unittest.TestCase):
         self.assertEqual(result["visualizations"], [])
         self.assertEqual(mocked.await_args.args[2], "explain")
         self.assertEqual(server.VALID_MODES, {"explain", "socratic"})
-
 
     def test_text_chat_streams_tokens_before_done(self) -> None:
         async def fake_think(_text, _timer, _mode, on_token=None):

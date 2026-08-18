@@ -1,9 +1,8 @@
-"""KINGO VOICE TA brain shared by Week 3 streaming transports.
+"""KINGO VOICE TA brain shared by text and realtime transports.
 
-The single-student agent automatically stores weak concepts, recalls them on
-later turns, searches local course PDFs first, and uses trusted web search only
-when the course material is insufficient. External answers are accepted only
-when source URLs are present and are also written to an audit log.
+Every turn prefetches learner memory and local course-PDF evidence on the
+server. Grok only receives optional tools for trusted-web fallback and visual
+rendering, so mandatory retrieval never depends on model tool selection.
 """
 
 from __future__ import annotations
@@ -36,8 +35,6 @@ log = logging.getLogger("dispatcher")
 
 MOSS_MEMORY = MossMemoryStore()
 
-
-
 BASE_DIR = Path(__file__).resolve().parent
 WEB_SEARCH_LOG = BASE_DIR / "sources" / "web-search.jsonl"
 COURSE_SRCS_DIR = BASE_DIR / "srcs"
@@ -54,7 +51,6 @@ MAX_MATERIAL_BYTES = 25 * 1024 * 1024
 PDF_MAX_RESULTS = 3
 PDF_PAGE_CACHE: list[dict] | None = None
 MAX_HISTORY_MESSAGES = 12
-
 
 
 def list_course_materials() -> list[dict]:
@@ -79,7 +75,9 @@ def get_course_material_path(filename: str) -> Path:
     Returns:
         Existing path inside the course materials directory.
     """
-    if not filename or filename != Path(filename).name or any(char in filename for char in ("\\", "\0")):
+    if not filename or filename != Path(filename).name or any(
+        char in filename for char in ("\\", "\0")
+    ):
         raise ValueError("invalid filename")
     if Path(filename).suffix.casefold() != ".pdf":
         raise ValueError("only PDF course materials are supported")
@@ -100,7 +98,9 @@ def add_course_material(filename: str, content: bytes) -> dict:
         Saved material record containing filename and byte size.
     """
     global PDF_PAGE_CACHE
-    if not filename or filename != Path(filename).name or any(char in filename for char in ("\\", "\0")):
+    if not filename or filename != Path(filename).name or any(
+        char in filename for char in ("\\", "\0")
+    ):
         raise ValueError("invalid filename")
     if Path(filename).suffix.casefold() != ".pdf":
         raise ValueError("only PDF course materials are supported")
@@ -252,7 +252,6 @@ class StageTimer:
         log.info("stage %-5s %5d ms", name, ms)
 
 
-
 class TextQuestion(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     mode: Literal["explain", "socratic"] = "socratic"
@@ -276,10 +275,8 @@ class Visualization(BaseModel):
     page: int = Field(default=0, ge=0)
 
 
-
-
 HISTORY: list[dict] = []
-# ponytail: one in-process student session; split by authenticated user when auth lands.
+# One in-process student session; split by authenticated user when auth lands.
 
 SYSTEM_PROMPT = """
 # Role
@@ -293,15 +290,16 @@ such as 해요, 예요, 볼까요, and 해볼게요. Avoid written declarative e
 as 한다, 이다, and 하였다, and avoid textbook or report-like prose unless you are
 quoting a source.
 
+# Context
+Before every answer, the server provides relevant learner-memory context and
+course-PDF evidence. Use that preloaded context to personalize hints, check
+prerequisites, and ground factual claims. Do not ask for or invoke separate
+memory/PDF retrieval tools. If the course evidence is missing or insufficient,
+trusted web search is allowed.
+
 # Tool usage
-recall_weak_concepts: At the start of every student turn, recall relevant
-weaknesses and use them to personalize hints and check prerequisites. Call it
-together with search_course_materials.
-
-search_course_materials: At the start of every student turn, search the course
-PDFs for evidence. Call it together with recall_weak_concepts.
-
-search_trusted_web: Call only when PDF evidence is missing or insufficient.
+search_trusted_web: Call only when the preloaded course-PDF evidence is missing
+or insufficient.
 
 show_visualization: Call before the final answer when it would otherwise
 contain a formula, process diagram, graph, or other visual data. Also call it
@@ -309,9 +307,9 @@ with kind pdf when the student asks to see a referenced course PDF page. Follow
 all visualization rules below.
 
 # Evidence and source rules
-Base factual claims only on tool results. For PDF evidence, state filename and
-page, but paraphrase any equation instead of quoting or reading it. Put the
-exact equation in show_visualization.
+Base factual claims only on the preloaded context and tool results. For PDF
+evidence, state filename and page, but paraphrase any equation instead of
+quoting or reading it. Put the exact equation in show_visualization.
 Return source URLs through the separate sources field; do not repeat raw URLs
 in the conversational answer.
 
@@ -327,9 +325,9 @@ show_visualization. Do not send the final conversational answer until that tool
 has succeeded. In the spoken answer, explain only what the visual means; never
 repeat its LaTeX, symbols, equation, or coordinates, even when quoting a PDF.
 Then explain it naturally with a reference such as '제가 보여드린 그림처럼'.
-For a PDF visualization, use the exact filename and page from a search result,
-the student's explicit request, or a prior assistant reference; never invent
-a file or page number.
+For a PDF visualization, use the exact filename and page from the preloaded
+course evidence, the student's explicit request, or a prior assistant
+reference; never invent a file or page number.
 
 # Output format
 Use one to three short conversational sentences with no markdown lists. Never
@@ -341,8 +339,7 @@ MODE_PROMPTS = {
         "Explanation mode: explain the concept directly in plain Korean, give "
         "one concrete example, then ask one short understanding-check question."
     ),
-    "socratic": (
-        """
+    "socratic": """
 Socratic mode:
 Help the student derive the answer instead of explaining it.
 
@@ -352,8 +349,7 @@ Help the student derive the answer instead of explaining it.
 - If wrong or stuck, give only a small hint and make the question easier.
 - Explain directly only when the student explicitly asks for the answer.
 - Maximum two short spoken sentences.
-"""
-    ),
+""",
 }
 
 MAX_TOOL_ROUNDS = 6
@@ -361,54 +357,10 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "recall_weak_concepts",
-            "description": (
-                "Recall semantically relevant weak concepts for this student. "
-                "Call on every student turn before answering."
-            ),
-            "strict": True,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "topic": {
-                        "type": "string",
-                        "description": "Current question or concept used for memory retrieval.",
-                    },
-                },
-                "required": ["topic"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_course_materials",
-            "description": (
-                "Search uploaded course PDFs for grounded evidence. "
-                "Call on every student turn before answering."
-            ),
-            "strict": True,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Focused terms from the student question.",
-                    },
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "search_trusted_web",
             "description": (
-                "Search professor-approved trusted domains only after course "
-                "material search is missing or insufficient."
+                "Search professor-approved trusted domains only after the preloaded "
+                "course material is missing or insufficient."
             ),
             "strict": True,
             "parameters": {
@@ -420,7 +372,7 @@ TOOLS = [
                     },
                     "reason": {
                         "type": "string",
-                        "description": "Specific gap in course PDF evidence.",
+                        "description": "Specific gap in the preloaded course-PDF evidence.",
                     },
                 },
                 "required": ["query", "reason"],
@@ -446,34 +398,64 @@ TOOLS = [
                     "title": {"type": "string", "description": "Short Korean title."},
                     "kind": {"type": "string", "enum": ["formula", "flow", "plot", "pdf"]},
                     "caption": {"type": "string", "description": "One concise Korean takeaway."},
-                    "latex": {"type": "string", "description": "Raw LaTeX without dollar delimiters; empty unless kind is formula."},
-                    "labels": {"type": "array", "items": {"type": "string"}, "description": "Ordered node labels; empty unless kind is flow."},
+                    "latex": {
+                        "type": "string",
+                        "description": "Raw LaTeX without dollar delimiters; empty unless kind is formula.",
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ordered node labels; empty unless kind is flow.",
+                    },
                     "points": {
                         "type": "array",
                         "description": "Numeric points; empty unless kind is plot.",
                         "items": {
                             "type": "object",
-                            "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+                            "properties": {
+                                "x": {"type": "number"},
+                                "y": {"type": "number"},
+                            },
                             "required": ["x", "y"],
                             "additionalProperties": False,
                         },
                     },
-                    "x_label": {"type": "string", "description": "Plot x-axis label, otherwise empty."},
-                    "y_label": {"type": "string", "description": "Plot y-axis label, otherwise empty."},
-                    "file": {"type": "string", "description": "Exact course PDF filename; empty unless kind is pdf."},
-                    "page": {"type": "integer", "minimum": 0, "description": "1-based PDF page; zero unless kind is pdf."},
+                    "x_label": {
+                        "type": "string",
+                        "description": "Plot x-axis label, otherwise empty.",
+                    },
+                    "y_label": {
+                        "type": "string",
+                        "description": "Plot y-axis label, otherwise empty.",
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "Exact course PDF filename; empty unless kind is pdf.",
+                    },
+                    "page": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "1-based PDF page; zero unless kind is pdf.",
+                    },
                 },
-                "required": ["title", "kind", "caption", "latex", "labels", "points", "x_label", "y_label", "file", "page"],
+                "required": [
+                    "title",
+                    "kind",
+                    "caption",
+                    "latex",
+                    "labels",
+                    "points",
+                    "x_label",
+                    "y_label",
+                    "file",
+                    "page",
+                ],
                 "additionalProperties": False,
             },
         },
     },
 ]
-# Retrieval and persistence helpers.
 
-# --------------------------------------------------------------------------
-# HOMEWORK 2 — the tool implementations. Fast, terse, validated.
-# --------------------------------------------------------------------------
 
 def _json(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False)
@@ -528,7 +510,7 @@ def _terms(text: str) -> set[str]:
 
 
 async def recall_weak_concepts(topic: str) -> str:
-    """Recall weak concepts relevant to a topic.
+    """Recall weak concepts relevant to a topic for server-side prefetch.
 
     Args:
         topic: Current student question or concept.
@@ -574,7 +556,7 @@ def _excerpt(text: str, terms: set[str], limit: int = 1000) -> str:
 
 
 def search_course_materials(query: str) -> str:
-    """Search indexed course PDFs by page.
+    """Search indexed course PDFs by page for server-side prefetch.
 
     Args:
         query: Focused terms from student question.
@@ -613,6 +595,79 @@ def search_course_materials(query: str) -> str:
                 else "No PDF evidence found; trusted web search is now allowed."
             ),
         }
+    )
+
+
+async def prefetch_context(question: str, timer: StageTimer | None = None) -> dict:
+    """Fetch learner memory and course-PDF evidence in parallel before Grok runs.
+
+    Args:
+        question: Current student utterance or typed question.
+        timer: Optional latency collector used by the text path.
+
+    Returns:
+        JSON-compatible context with the student question, learner memory, and
+        course-material search results.
+    """
+    topic = question.strip()
+
+    async def recall() -> object:
+        started_at = time.perf_counter()
+        try:
+            return await recall_weak_concepts(topic)
+        finally:
+            if timer is not None:
+                timer.record("recall", started_at)
+
+    async def search_pdf() -> object:
+        started_at = time.perf_counter()
+        try:
+            return await asyncio.to_thread(search_course_materials, topic)
+        finally:
+            if timer is not None:
+                timer.record("pdf", started_at)
+
+    memory_raw, pdf_raw = await asyncio.gather(
+        recall(),
+        search_pdf(),
+        return_exceptions=True,
+    )
+
+    def decode(value: object, source: str) -> object:
+        if isinstance(value, Exception):
+            return {"error": f"{source} prefetch failed: {value}"}
+        try:
+            return json.loads(value) if isinstance(value, str) else value
+        except json.JSONDecodeError:
+            return {"error": f"{source} returned invalid JSON"}
+
+    return {
+        "student_question": topic,
+        "weak_concepts": decode(memory_raw, "memory"),
+        "course_materials": decode(pdf_raw, "course PDF"),
+    }
+
+
+def answer_instructions(mode: str, context: dict) -> str:
+    """Build final-answer instructions shared by text and realtime voice.
+
+    Args:
+        mode: Learner-selected explanation or Socratic mode.
+        context: Server-prefetched learner memory and course-PDF evidence.
+
+    Returns:
+        System instructions containing the shared policy and preloaded context.
+    """
+    prefetched = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"{MODE_PROMPTS.get(mode, MODE_PROMPTS['socratic'])}\n\n"
+        "# Preloaded context\n"
+        "The server already prepared learner-memory context and course-PDF evidence "
+        "for this student turn. Treat the following JSON as authoritative context. "
+        "Use search_trusted_web only when course_materials is missing, reports an "
+        "error, or is insufficient for the requested factual claim.\n"
+        f"{prefetched}"
     )
 
 
@@ -658,7 +713,8 @@ def search_trusted_web(
                 "role": "system",
                 "content": (
                     "Answer in Korean using only the web-search evidence. "
-                    "Keep source URLs in the tool result, not in the prose answer. If evidence is insufficient, say so."
+                    "Keep source URLs in the tool result, not in the prose answer. "
+                    "If evidence is insufficient, say so."
                 ),
             },
             {"role": "user", "content": query},
@@ -696,13 +752,15 @@ def search_trusted_web(
             "found": True,
             "answer": answer,
             "sources": sources,
-            "instruction": "The UI displays source URLs separately; do not repeat them in the answer.",
+            "instruction": (
+                "The UI displays source URLs separately; do not repeat them in the answer."
+            ),
         }
     )
 
 
 async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
-    """Dispatch one validated function tool call.
+    """Dispatch one optional model-selected tool call.
 
     Args:
         name: Tool name emitted by Grok.
@@ -714,18 +772,12 @@ async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
     """
     started_at = time.perf_counter()
     stage = {
-        "recall_weak_concepts": "recall",
-        "search_course_materials": "pdf",
         "search_trusted_web": "web",
         "show_visualization": "visual",
     }.get(name, "tool")
     log.info("tool call name=%s args=%s", name, _tool_log_value(args))
     try:
-        if name == "recall_weak_concepts":
-            result = await recall_weak_concepts(**args)
-        elif name == "search_course_materials":
-            result = await asyncio.to_thread(search_course_materials, **args)
-        elif name == "search_trusted_web":
+        if name == "search_trusted_web":
             result = await asyncio.to_thread(
                 search_trusted_web,
                 pdf_evidence_insufficient=True,
@@ -755,16 +807,17 @@ async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
     return result
 
 
-# Function-tool response pipeline.
-# --------------------------------------------------------------------------
-
 def _append_history(message: dict) -> None:
     HISTORY.append(message)
     if len(HISTORY) > MAX_HISTORY_MESSAGES:
         del HISTORY[:-MAX_HISTORY_MESSAGES]
 
 
-async def _stream_completion(client, request: dict, on_token: Callable[[str], Awaitable[None]]):
+async def _stream_completion(
+    client,
+    request: dict,
+    on_token: Callable[[str], Awaitable[None]],
+):
     """Stream text deltas while reconstructing any function calls."""
     stream = await asyncio.to_thread(client.chat.completions.create, **request, stream=True)
     content: list[str] = []
@@ -779,7 +832,10 @@ async def _stream_completion(client, request: dict, on_token: Callable[[str], Aw
                 content.append(delta.content)
                 await on_token(delta.content)
             for part in delta.tool_calls or []:
-                call = calls.setdefault(part.index, {"id": "", "name": "", "arguments": ""})
+                call = calls.setdefault(
+                    part.index,
+                    {"id": "", "name": "", "arguments": ""},
+                )
                 if part.id:
                     call["id"] = part.id
                 if part.function:
@@ -805,68 +861,51 @@ async def _stream_completion(client, request: dict, on_token: Callable[[str], Aw
     )
 
 
-
 async def think(
     transcript: str,
     timer: StageTimer,
     mode: str = "socratic",
     on_token: Callable[[str], Awaitable[None]] | None = None,
 ) -> tuple[str, list[str], list[str], list[dict]]:
-    """Generate one grounded Socratic response through function tools.
+    """Generate one grounded response using server-prefetched context.
 
     Args:
         transcript: Student utterance transcribed to text.
-        timer: Collector for tool and model latency.
+        timer: Collector for retrieval, tool, and model latency.
         mode: Learner-selected explanation or Socratic mode.
+        on_token: Optional callback for streamed text deltas.
 
     Returns:
-        Reply text, tool names, trusted source URLs, and visual references.
+        Reply text, optional tool names, trusted source URLs, and visual references.
     """
     _append_history({"role": "user", "content": transcript})
+    context = await prefetch_context(transcript, timer)
     client = xai_client()
     tool_messages: list[dict] = []
     tools_used: list[str] = []
     external_sources: list[str] = []
     visualizations: list[dict] = []
-    required_context = {"recall_weak_concepts", "search_course_materials"}
 
-    def completion_request(tool_choice: str) -> dict:
+    def completion_request() -> dict:
         return {
             "model": os.environ.get("CHAT_MODEL", "grok-4.3"),
             "reasoning_effort": os.environ.get("CHAT_REASONING_EFFORT", "none"),
             "max_completion_tokens": int(os.environ.get("CHAT_MAX_TOKENS", "1200")),
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "system", "content": MODE_PROMPTS.get(mode, MODE_PROMPTS["socratic"])},
+                {"role": "system", "content": answer_instructions(mode, context)},
                 *HISTORY,
                 *tool_messages,
             ],
             "tools": TOOLS,
-            "tool_choice": tool_choice,
+            "tool_choice": "auto",
             "parallel_tool_calls": True,
         }
 
-    def complete(tool_choice: str):
-        """Call Grok with tool schemas and accumulated tool results.
-
-        Args:
-            tool_choice: OpenAI tool selection mode for this round.
-
-        Returns:
-            OpenAI-compatible assistant message.
-        """
-        response = client.chat.completions.create(**completion_request(tool_choice))
+    def complete():
+        response = client.chat.completions.create(**completion_request())
         return response.choices[0].message
 
     async def execute(call) -> tuple[str, str]:
-        """Validate and dispatch one model tool call.
-
-        Args:
-            call: OpenAI-compatible function tool call.
-
-        Returns:
-            Tuple containing tool name and serialized result.
-        """
         name = call.function.name
         try:
             args = json.loads(call.function.arguments)
@@ -878,18 +917,20 @@ async def think(
         return name, result
 
     for _ in range(MAX_TOOL_ROUNDS):
-        tool_choice = "auto" if required_context.issubset(tools_used) else "required"
         started_at = time.perf_counter()
         if on_token:
-            msg = await _stream_completion(client, completion_request(tool_choice), on_token)
+            msg = await _stream_completion(client, completion_request(), on_token)
         else:
-            msg = await asyncio.to_thread(complete, tool_choice)
+            msg = await asyncio.to_thread(complete)
         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
         timer.timings_ms["grok"] = timer.timings_ms.get("grok", 0) + elapsed_ms
         log.info("stage grok  %5d ms", elapsed_ms)
 
         if not msg.tool_calls:
-            reply_text = (msg.content or "").strip() or "답변을 생성하지 못했어요. 다시 질문해 주세요."
+            reply_text = (
+                (msg.content or "").strip()
+                or "답변을 생성하지 못했어요. 다시 질문해 주세요."
+            )
             if external_sources:
                 reply_text = _for_speech(reply_text)
 
@@ -897,11 +938,13 @@ async def think(
             EXTERNAL_BRAIN.schedule(HISTORY, source="text")
             return reply_text, tools_used, external_sources[:3], visualizations
 
-        tool_messages.append({
-            "role": "assistant",
-            "content": msg.content,
-            "tool_calls": [call.model_dump() for call in msg.tool_calls],
-        })
+        tool_messages.append(
+            {
+                "role": "assistant",
+                "content": msg.content,
+                "tool_calls": [call.model_dump() for call in msg.tool_calls],
+            }
+        )
         results = await asyncio.gather(*(execute(call) for call in msg.tool_calls))
         for call, (name, result) in zip(msg.tool_calls, results):
             if name not in tools_used:
@@ -918,15 +961,16 @@ async def think(
                         visualizations.append(visual)
                 except json.JSONDecodeError:
                     pass
-            tool_messages.append({
-                "role": "tool",
-                "tool_call_id": call.id,
-                "content": result,
-            })
+            tool_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": result,
+                }
+            )
 
     raise RuntimeError("Grok exceeded the tool-call round limit")
-# Speech and lifecycle helpers used by server.py.
-# --------------------------------------------------------------------------
+
 
 def _for_speech(text: str) -> str:
     """Remove URLs from speech while keeping them in screen text.
@@ -938,11 +982,12 @@ def _for_speech(text: str) -> str:
         Speech-safe answer text.
     """
     text = re.sub(
-        r"\s*외부 출처\s*:?\s*(?:https?://\S+\s*,?\s*)+$", "", text,
+        r"\s*외부 출처\s*:?\s*(?:https?://\S+\s*,?\s*)+$",
+        "",
+        text,
         flags=re.IGNORECASE,
     )
     return re.sub(r"https?://\S+", "", text).strip()
-
 
 
 def reset_conversation() -> None:
@@ -957,10 +1002,12 @@ async def next_review_prompt() -> dict:
     if memory is None:
         return {"due": False}
     question = f"{memory['concept']}을 자신의 말로 설명해 볼까요?"
-    _append_history({
-        "role": "assistant",
-        "content": f"복습 질문 (memory_id={memory['id']}): {question}",
-    })
+    _append_history(
+        {
+            "role": "assistant",
+            "content": f"복습 질문 (memory_id={memory['id']}): {question}",
+        }
+    )
     return {
         "due": True,
         "memory_id": memory["id"],

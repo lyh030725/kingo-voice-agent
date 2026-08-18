@@ -12,6 +12,7 @@ os.environ["VOICE_AI_SKIP_DOTENV"] = "1"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import agent_spec
+import brain
 from grok_live import GrokTransport
 
 
@@ -34,12 +35,12 @@ class RealtimePrefetchTests(unittest.TestCase):
         async def scenario() -> None:
             with (
                 patch.object(
-                    agent_spec,
+                    brain,
                     "recall_weak_concepts",
                     new=AsyncMock(return_value=json.dumps({"memories": [{"concept": "softmax"}]})),
                 ) as recall,
                 patch.object(
-                    agent_spec,
+                    brain,
                     "search_course_materials",
                     return_value=json.dumps({"found": True, "results": [{"source": "week3.pdf p.4"}]}),
                 ) as pdf,
@@ -54,7 +55,7 @@ class RealtimePrefetchTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_final_response_uses_prefetched_context_after_filler(self) -> None:
+    def test_final_response_uses_same_shared_policy_as_text(self) -> None:
         async def scenario() -> None:
             transport = GrokTransport(mode="socratic")
             transport._ws = FakeSocket()
@@ -74,9 +75,11 @@ class RealtimePrefetchTests(unittest.TestCase):
             payload = transport._ws.sent[-1]
             self.assertEqual(payload["type"], "response.create")
             instructions = payload["response"]["instructions"]
-            self.assertIn("Realtime preloaded context", instructions)
+            self.assertEqual(instructions, brain.answer_instructions("socratic", context))
+            self.assertIn("# Preloaded context", instructions)
             self.assertIn("week3.pdf p.7", instructions)
-            self.assertIn("Do not try to call those tools again", instructions)
+            self.assertNotIn("recall_weak_concepts", instructions)
+            self.assertNotIn("search_course_materials", instructions)
 
         asyncio.run(scenario())
 
