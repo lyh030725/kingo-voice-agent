@@ -321,7 +321,7 @@ async def stream(ws: WebSocket) -> None:
     try:
         await transport.start()
         await ws.send_json({"type": "ready", "provider": transport.name})
-        await pump_caller_audio(ws, transport)
+        await pump_caller_input(ws, transport)
     except WebSocketDisconnect:
         log.info("stream closed")
     except Exception as exc:
@@ -340,11 +340,19 @@ def make_transport(mode: str) -> Transport:
     return GrokTransport(mode)
 
 
-async def pump_caller_audio(ws: WebSocket, transport: Transport) -> None:
-    """Relay validated 20 ms PCM frames while the mic stays open."""
+async def pump_caller_input(ws: WebSocket, transport: Transport) -> None:
+    """Relay validated microphone frames or typed turns to the voice agent."""
     while True:
         msg = await ws.receive_json()
-        if not isinstance(msg, dict) or msg.get("type") != "audio":
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("type") == "text":
+            text = msg.get("text")
+            if isinstance(text, str) and 1 <= len(text.strip()) <= 4000:
+                await ws.send_json({"type": "state", "value": "thinking"})
+                await transport.send_text(text.strip())
+            continue
+        if msg.get("type") != "audio":
             continue
         try:
             frame = base64.b64decode(msg.get("data", ""), validate=True)

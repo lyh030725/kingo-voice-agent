@@ -10,7 +10,7 @@
 - 학습자·교수자 화면 전환
 - 교수자 PDF 강의자료 업로드
 - 교수자 신뢰 사이트 추가·삭제
-- 학습자 텍스트 채팅과 핸즈프리 음성 대화
+- 학습자 텍스트 채팅과 핸즈프리 음성 대화(마이크 없는 환경의 텍스트 음성 에이전트 테스트 포함)
 - 수식·단계 도식·좌표 그래프·강의자료 PDF 페이지 visualization 카드
 - 설명·소크라테스 답변 모드
 - 강의자료 PDF RAG와 파일명·페이지 출처
@@ -54,7 +54,7 @@ uv run uvicorn server:app --port 8000
 | Method            | Path                 | 설명                                                   |
 | ----------------- | -------------------- | ------------------------------------------------------ |
 | `POST`            | `/answer-text`       | 텍스트 질문과 답변 모드 전달; reply·tools·sources 반환 |
-| `WS`              | `/stream`            | 16kHz PCM 음성·모드 송수신                             |
+| `WS`              | `/stream`            | 16kHz PCM 또는 텍스트로 realtime 음성 에이전트 대화    |
 | `GET/POST`        | `/api/materials`     | 강의자료 조회·PDF 업로드                               |
 | `GET`             | `/api/materials/{filename}` | 업로드된 PDF를 브라우저에 inline 표시           |
 | `GET/POST/DELETE` | `/api/trusted-sites` | 신뢰 도메인 조회·추가·삭제(최대 5개)                   |
@@ -77,6 +77,8 @@ AudioWorklet → WebSocket → xAI Grok Voice Agent (server VAD + tools)
 ```
 
 브라우저는 마이크를 계속 연 상태로 20ms 단위의 16kHz PCM을 전송합니다. 사용자가 응답 도중 말하면 xAI의 `speech_started` 이벤트가 생성 중인 응답을 취소하고 브라우저의 예약된 PCM을 즉시 비웁니다. 스피커 음성이 마이크로 재입력되지 않도록 헤드폰 사용을 권장합니다.
+
+마이크가 없거나 권한을 허용하지 않아도 `음성 시작`을 누르면 realtime 세션은 유지됩니다. 이때 채팅창에 질문을 입력하면 같은 음성 에이전트가 도구를 사용하고 음성·텍스트로 응답합니다.
 
 구조와 barge-in 흐름은 [voice-ai-course Week 4 Duplex](https://github.com/civiliangame/voice-ai-course/blob/main/week4.md)의 기본 template를 따릅니다.
 

@@ -74,6 +74,11 @@ class Transport(ABC):
         pass
 
     @abstractmethod
+    async def send_text(self, text: str) -> None:
+        """Submit a typed user turn to the live voice session."""
+        pass
+
+    @abstractmethod
     def events(self) -> AsyncIterator[Event]:
         pass
 

@@ -97,6 +97,18 @@ class GrokTransport(Transport):
                 "audio": base64.b64encode(pcm).decode(),
             })
 
+    async def send_text(self, text: str) -> None:
+        if self._ws is not None and not self._closed:
+            await self._send({
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            })
+            await self._send({"type": "response.create"})
+
     async def events(self) -> AsyncIterator:
         await self._connected.wait()
         assert self._ws is not None

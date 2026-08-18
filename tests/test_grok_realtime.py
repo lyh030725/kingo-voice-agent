@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import agent_spec
 import server
+from fastapi import WebSocketDisconnect
 from grok_live import GrokTransport
 from transport import AgentAudio, AgentTextDelta, AgentTurnDone, Failed, ToolCalled, Transcript, UserStartedSpeaking
 
@@ -74,6 +75,65 @@ class GrokRealtimeTests(unittest.TestCase):
             events = [event async for event in transport.events()]
 
             self.assertEqual(events, [Failed("authentication expired")])
+
+        asyncio.run(scenario())
+
+    def test_typed_turn_uses_realtime_conversation_and_requests_response(self) -> None:
+        async def scenario() -> None:
+            transport = GrokTransport()
+            transport._ws = FakeSocket([])
+            await transport.send_text("소프트맥스를 설명해줘")
+
+            self.assertEqual(transport._ws.sent, [
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "소프트맥스를 설명해줘"}],
+                    },
+                },
+                {"type": "response.create"},
+            ])
+
+        asyncio.run(scenario())
+
+    def test_browser_falls_back_to_typed_realtime_turn_without_microphone(self) -> None:
+        page = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('ws.send(JSON.stringify({ type: "text", text: text }))', page)
+        self.assertIn("if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)", page)
+        self.assertIn("마이크 없음 · 채팅창에 입력해 음성 에이전트 테스트", page)
+
+    def test_server_relays_typed_turn_to_voice_transport(self) -> None:
+        class Browser:
+            def __init__(self) -> None:
+                self.sent = []
+                self.received = False
+
+            async def receive_json(self):
+                if self.received:
+                    raise WebSocketDisconnect()
+                self.received = True
+                return {"type": "text", "text": "  ARIMA가 뭐야?  "}
+
+            async def send_json(self, message):
+                self.sent.append(message)
+
+        class Provider:
+            def __init__(self) -> None:
+                self.texts = []
+
+            async def send_text(self, text):
+                self.texts.append(text)
+
+        async def scenario() -> None:
+            browser = Browser()
+            provider = Provider()
+            with self.assertRaises(WebSocketDisconnect):
+                await server.pump_caller_input(browser, provider)
+            self.assertEqual(provider.texts, ["ARIMA가 뭐야?"])
+            self.assertEqual(browser.sent, [{"type": "state", "value": "thinking"}])
 
         asyncio.run(scenario())
 

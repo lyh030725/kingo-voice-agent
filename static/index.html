@@ -820,6 +820,19 @@ byId("chat-form").addEventListener("submit", async (event) => {
   const input = byId("chat-input");
   const text = input.value.trim();
   if (!text) return;
+  if (ws) {
+    if (ws.readyState !== WebSocket.OPEN) {
+      addMessage("assistant", "음성 에이전트에 연결 중입니다. 잠시 후 다시 보내 주세요.", null, null, null, "error");
+      return;
+    }
+    const userMessage = addMessage("user", text);
+    voiceUserPending = userMessage;
+    input.value = "";
+    ws.send(JSON.stringify({ type: "text", text: text }));
+    setVoiceState("thinking", "텍스트 질문에 응답 준비 중");
+    input.focus();
+    return;
+  }
   addMessage("user", text);
   const pending = startAssistantResponse();
   input.value = "";
@@ -1119,7 +1132,15 @@ function setVoiceState(next, label) {
 }
 
 async function startVoice() {
+  byId("voice-orb").disabled = true;
+  byId("stop-voice").classList.remove("hidden");
+  connectSocket();
+  setVoiceState("thinking", "음성 에이전트 연결 중");
+  try { initPlayback(); } catch (_) { playContext = null; }
   try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("사용 가능한 마이크 장치가 없습니다.");
+    }
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
@@ -1130,14 +1151,15 @@ async function startVoice() {
     const capture = new AudioWorkletNode(audioContext, "pcm-capture");
     source.connect(capture);
     capture.port.onmessage = (event) => sendSamples(event.data);
-    initPlayback();
-    connectSocket();
-    byId("voice-orb").disabled = true;
     byId("mute").classList.remove("hidden");
-    byId("stop-voice").classList.remove("hidden");
     setVoiceState("listening", "듣는 중");
   } catch (error) {
-    byId("voice-status").textContent = "마이크 오류: " + error.message;
+    if (micStream) micStream.getTracks().forEach((track) => track.stop());
+    if (audioContext) audioContext.close();
+    micStream = null;
+    audioContext = null;
+    byId("mute").classList.add("hidden");
+    if (ws) setVoiceState("listening", "마이크 없음 · 채팅창에 입력해 음성 에이전트 테스트");
   }
 }
 byId("voice-orb").addEventListener("click", startVoice);
@@ -1145,7 +1167,13 @@ byId("voice-orb").addEventListener("click", startVoice);
 function connectSocket() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(protocol + "://" + location.host + "/stream?mode=" + encodeURIComponent(learningMode));
-  ws.onclose = () => setVoiceState("idle", "연결 종료");
+  ws.onclose = () => {
+    ws = null;
+    byId("voice-orb").disabled = false;
+    byId("mute").classList.add("hidden");
+    byId("stop-voice").classList.add("hidden");
+    setVoiceState("idle", "연결 종료");
+  };
   ws.onmessage = (event) => handleSocket(JSON.parse(event.data));
 }
 
@@ -1176,7 +1204,7 @@ function replaceVoiceAssistantMessage(current, text, tools, timings) {
 
 function handleSocket(message) {
   if (message.type === "ready") {
-    setVoiceState("listening", "듣는 중");
+    setVoiceState("listening", micStream ? "듣는 중" : "마이크 없음 · 채팅창에 입력해 음성 에이전트 테스트");
   } else if (message.type === "state") {
     const labels = { hearing: "말씀 듣는 중", thinking: "응답 준비 중", speaking: "응답 중", listening: "듣는 중" };
     if (message.value === "hearing") {
