@@ -21,8 +21,11 @@ SYSTEM_PROMPT = """
 당신은 음성 튜터와 분리된 학습 진단 모델입니다. 매 턴이 끝난 뒤 최근 전체
 대화 맥락과 저장된 취약 개념을 보고 아래 두 작업만 수행합니다.
 
-1. 학생이 명백히 틀리거나, 혼동하거나, 불완전하게 이해한 경우에만 새 취약
-   개념을 제안합니다. 단순 질문이나 처음 배우는 주제는 취약점이 아닙니다.
+1. 학생이 명백히 틀리거나, 개념을 혼동하거나, 불완전하게 이해한
+   경우에 새 취약 개념을 제안합니다. 같은 개념에서 답을 반복해 못하거나,
+   힌트 후에도 막히거나, 이해하지 못한 부분을 구체적으로 도와달라고 한
+   경우도 불완전한 이해의 증거로 보세요. 단, 맥락 없는 단순 질문이나 처음
+   소개받는 주제만으로는 저장하지 마세요.
 2. 저장된 개념과 의미상 같은 취약점은 표현이 달라도 다시 저장하지 않습니다.
 3. concept와 difficulty_note는 짧고 구체적인 한국어로 작성합니다.
 4. 현재 대화가 저장된 취약 개념의 주제를 실제로 다루고, 학생의 답변에서
@@ -152,9 +155,13 @@ class ExternalBrain:
             ],
         }
         response = self.client_factory().chat.completions.create(
-            model=os.environ.get("EXTERNAL_BRAIN_MODEL", "grok-4.3"),
-            reasoning_effort=os.environ.get("EXTERNAL_BRAIN_REASONING_EFFORT", "high"),
-            max_completion_tokens=int(os.environ.get("EXTERNAL_BRAIN_MAX_TOKENS", "900")),
+            model=_setting("EXTERNAL_BRAIN_MODEL", "WEAKNESS_MODEL", "grok-4.3"),
+            reasoning_effort=_setting(
+                "EXTERNAL_BRAIN_REASONING_EFFORT", "WEAKNESS_REASONING_EFFORT", "high"
+            ),
+            max_completion_tokens=int(
+                _setting("EXTERNAL_BRAIN_MAX_TOKENS", "WEAKNESS_MAX_TOKENS", "900")
+            ),
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -210,6 +217,10 @@ class ExternalBrain:
 
 def _contains_korean(value: str) -> bool:
     return any("가" <= character <= "힣" for character in value)
+
+
+def _setting(primary: str, legacy: str, default: str) -> str:
+    return os.environ.get(primary) or os.environ.get(legacy) or default
 
 
 def _preview(value: str) -> str:

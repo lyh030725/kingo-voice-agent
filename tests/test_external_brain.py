@@ -4,10 +4,36 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from external_brain import ExternalBrain
+from external_brain import ExternalBrain, SYSTEM_PROMPT
 
 
 class ExternalBrainTests(unittest.TestCase):
+    def test_prompt_treats_repeated_struggle_as_weakness_evidence(self) -> None:
+        self.assertIn("답을 반복해 못하거나", SYSTEM_PROMPT)
+        self.assertIn("힌트 후에도 막히거나", SYSTEM_PROMPT)
+
+    def test_legacy_weakness_settings_configure_external_brain(self) -> None:
+        memory = SimpleNamespace(all_memories=AsyncMock(return_value=[]))
+        completion = Mock(return_value=SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='{"save": null, "reviews": []}')
+        )]))
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion)))
+        external = ExternalBrain(memory, lambda: client)
+
+        with patch.dict("os.environ", {
+            "EXTERNAL_BRAIN_MODEL": "",
+            "EXTERNAL_BRAIN_REASONING_EFFORT": "",
+            "EXTERNAL_BRAIN_MAX_TOKENS": "",
+            "WEAKNESS_MODEL": "legacy-model",
+            "WEAKNESS_REASONING_EFFORT": "low",
+            "WEAKNESS_MAX_TOKENS": "321",
+        }):
+            external._decide([], [])
+
+        self.assertEqual(completion.call_args.kwargs["model"], "legacy-model")
+        self.assertEqual(completion.call_args.kwargs["reasoning_effort"], "low")
+        self.assertEqual(completion.call_args.kwargs["max_completion_tokens"], 321)
+
     def test_context_drives_korean_save_and_only_known_review(self) -> None:
         memory = SimpleNamespace(
             all_memories=AsyncMock(return_value=[{

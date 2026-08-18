@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import agent_spec
 import brain
-from grok_live import GrokTransport
 
 
 class FakeSocket:
@@ -25,11 +24,14 @@ class FakeSocket:
 
 
 class RealtimePrefetchTests(unittest.TestCase):
-    def test_realtime_schema_exposes_only_optional_tools(self) -> None:
+    def test_realtime_schema_exposes_model_selected_context_tools(self) -> None:
         names = {tool["name"] for tool in agent_spec.json_schemas()}
-        self.assertEqual(names, {"search_trusted_web", "show_visualization"})
-        self.assertNotIn("recall_weak_concepts", names)
-        self.assertNotIn("search_course_materials", names)
+        self.assertEqual(names, {
+            "recall_weak_concepts",
+            "search_course_materials",
+            "search_trusted_web",
+            "show_visualization",
+        })
 
     def test_prefetch_context_runs_memory_and_pdf_without_model_tool_calls(self) -> None:
         async def scenario() -> None:
@@ -45,7 +47,7 @@ class RealtimePrefetchTests(unittest.TestCase):
                     return_value=json.dumps({"found": True, "results": [{"source": "week3.pdf p.4"}]}),
                 ) as pdf,
             ):
-                context = await agent_spec.prefetch_context(" softmax scaling ")
+                context = await brain.prefetch_context(" softmax scaling ")
 
             recall.assert_awaited_once_with("softmax scaling")
             pdf.assert_called_once_with("softmax scaling")
@@ -55,40 +57,12 @@ class RealtimePrefetchTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_final_response_uses_same_shared_policy_as_text(self) -> None:
-        async def scenario() -> None:
-            transport = GrokTransport(mode="socratic")
-            transport._ws = FakeSocket()
-            context = {
-                "student_question": "attention scaling",
-                "weak_concepts": {"memories": []},
-                "course_materials": {
-                    "found": True,
-                    "results": [{"source": "week3.pdf p.7", "excerpt": "scaled dot product"}],
-                },
-            }
-            transport._turn_context = context
-
-            await transport._request_answer_response()
-
-            self.assertEqual(transport._next_response_phase, "answer")
-            payload = transport._ws.sent[-1]
-            self.assertEqual(payload["type"], "response.create")
-            instructions = payload["response"]["instructions"]
-            self.assertEqual(instructions, brain.answer_instructions("socratic", context))
-            self.assertIn("# Preloaded context", instructions)
-            self.assertIn("week3.pdf p.7", instructions)
-            self.assertNotIn("recall_weak_concepts", instructions)
-            self.assertNotIn("search_course_materials", instructions)
-
-        asyncio.run(scenario())
-
-    def test_session_persona_is_filler_only_and_keeps_dynamic_topic_guidance(self) -> None:
+    def test_session_persona_routes_simple_turns_without_filler(self) -> None:
         prompt = agent_spec.persona("socratic")
-        self.assertIn("first response after each student turn", prompt)
-        self.assertIn("Make it fit the student's topic", prompt)
-        self.assertIn("Do not answer", prompt)
-        self.assertNotIn("Socratic mode:", prompt)
+        self.assertIn("Answer greetings, thanks, casual conversation, and", prompt)
+        self.assertIn("Only immediately before calling search_course_materials", prompt)
+        self.assertIn("not say a filler before show_visualization", prompt)
+        self.assertIn("Socratic mode:", prompt)
 
 
 if __name__ == "__main__":

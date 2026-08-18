@@ -78,14 +78,6 @@ class CourseAgentSymbol extends HTMLElement {
         .energy { stroke-width: 2.4; stroke-dasharray: .16 1; }
         .tip { fill: var(--course-agent-highlight); opacity: 0; }
 
-        :host([animated][state="presence"]) .core,
-        :host([animated][state="sustain"]) .core {
-          animation: course-agent-breathe 3s ease-in-out infinite;
-        }
-        :host([animated][state="presence"]) .halo,
-        :host([animated][state="sustain"]) .halo {
-          animation: course-agent-halo 3s ease-in-out infinite;
-        }
         :host([animated][state="resonance"]) .core {
           animation: course-agent-response .3s cubic-bezier(.4, 0, .2, 1) 1;
         }
@@ -117,14 +109,6 @@ class CourseAgentSymbol extends HTMLElement {
           animation: course-agent-error .45s ease-out 1;
         }
 
-        @keyframes course-agent-breathe {
-          0%, 100% { transform: scale(1); opacity: 1; }
-          50% { transform: scale(1.03); opacity: .88; }
-        }
-        @keyframes course-agent-halo {
-          0%, 100% { opacity: 0; transform: scale(.75); }
-          50% { opacity: .18; transform: scale(1); }
-        }
         @keyframes course-agent-response {
           0%, 100% { transform: scale(1); }
           45% { transform: scale(1.08); }

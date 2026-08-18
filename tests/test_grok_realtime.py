@@ -12,6 +12,7 @@ os.environ["VOICE_AI_SKIP_DOTENV"] = "1"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import agent_spec
+import grok_live
 import server
 from fastapi import WebSocketDisconnect
 from grok_live import GrokTransport
@@ -80,9 +81,9 @@ class GrokRealtimeTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_filler_instruction_is_voice_only(self) -> None:
-        self.assertIn("Immediately before the first tool call", agent_spec.persona("socratic"))
-        self.assertNotIn("Voice-only filler", agent_spec.SYSTEM_PROMPT)
+    def test_conditional_filler_instruction_is_voice_only(self) -> None:
+        self.assertIn("Only immediately before calling search_course_materials", agent_spec.persona("socratic"))
+        self.assertNotIn("Realtime context and filler", agent_spec.SYSTEM_PROMPT)
 
     def test_barge_in_cancels_active_response_and_discards_remaining_audio(self) -> None:
         async def scenario() -> None:
@@ -248,6 +249,56 @@ class GrokRealtimeTests(unittest.TestCase):
                 [message for message in browser.sent if message["type"] == "transcript"],
                 [{"type": "transcript", "who": "agent", "text": "찾았어요."}],
             )
+        asyncio.run(scenario())
+
+    def test_slow_tool_timeout_still_requests_final_response(self) -> None:
+        async def scenario() -> None:
+            transport = GrokTransport()
+            transport._ws = FakeSocket([
+                {
+                    "type": "response.function_call_arguments.done",
+                    "name": "search_course_materials",
+                    "call_id": "slow-1",
+                    "arguments": '{"query":"attention"}',
+                },
+                {"type": "response.done"},
+            ])
+            transport._connected.set()
+
+            async def stalled_tool(*_args, **_kwargs):
+                await asyncio.sleep(1)
+
+            with (
+                patch.object(agent_spec, "run_tool", new=stalled_tool),
+                patch.object(grok_live, "TOOL_TIMEOUT_S", 0.01),
+            ):
+                events = [event async for event in transport.events()]
+
+            outputs = [
+                item for item in transport._ws.sent
+                if item.get("type") == "conversation.item.create"
+            ]
+            self.assertEqual(json.loads(outputs[0]["item"]["output"]), {
+                "error": "search_course_materials timed out"
+            })
+            self.assertEqual(transport._ws.sent.count({"type": "response.create"}), 1)
+
+        asyncio.run(scenario())
+
+    def test_simple_response_finishes_without_context_follow_up(self) -> None:
+        async def scenario() -> None:
+            transport = GrokTransport()
+            transport._ws = FakeSocket([
+                {"type": "response.created"},
+                {"type": "response.output_audio_transcript.delta", "delta": "안녕하세요!"},
+                {"type": "response.done"},
+            ])
+            transport._connected.set()
+
+            events = [event async for event in transport.events()]
+
+            self.assertIn(AgentTurnDone(), events)
+            self.assertEqual(transport._ws.sent.count({"type": "response.create"}), 0)
 
         asyncio.run(scenario())
 
@@ -304,12 +355,27 @@ class GrokRealtimeTests(unittest.TestCase):
         self.assertIn('message.type === "flush"', page)
         self.assertIn('message.type === "token"', page)
         self.assertIn("voicePending.bubble.append(message.text)", page)
+        self.assertIn('message.type === "text_boundary"', page)
+        boundary = page.index('message.type === "text_boundary"')
+        transcript = page.index('message.type === "transcript"', boundary)
+        self.assertIn(
+            'voicePending = addMessage("assistant", "", null, null, null, "flow")',
+            page[boundary:transcript],
+        )
         self.assertIn("function flushPlayback()", page)
         self.assertIn("for (const source of activeSources)", page)
 
     def test_browser_coalesces_voice_transcripts_and_waits_for_playback(self) -> None:
         page = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
 
+        chat_submit = page.index('byId("chat-form").addEventListener("submit"')
+        realtime_submit = page.index("if (ws) {", chat_submit)
+        add_user = page.index('addMessage("user", text)', realtime_submit)
+        send_text = page.index('ws.send(JSON.stringify({ type: "text", text: text }))', realtime_submit)
+        turn_start = page[realtime_submit:add_user]
+        self.assertIn("voicePending = null;", turn_start)
+        self.assertIn("voiceLastAssistant = null;", turn_start)
+        self.assertLess(add_user, send_text)
         self.assertIn("voiceUserPending.bubble.textContent = message.text", page)
         self.assertIn("function replaceVoiceAssistantMessage", page)
         self.assertIn("voicePending || voiceLastAssistant", page)

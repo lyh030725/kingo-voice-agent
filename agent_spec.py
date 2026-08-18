@@ -5,43 +5,77 @@ from __future__ import annotations
 import json
 
 from brain import (
+    MODE_PROMPTS,
     SYSTEM_PROMPT,
     TOOLS,
     StageTimer,
-    answer_instructions,
-    prefetch_context,
     run_tool as run_brain_tool,
 )
 
-VOICE_FILLER_PROMPT = """
-# Voice-only filler
-Immediately before the first tool call, if one is later needed, the first
-response after each student turn must already have said exactly one short Korean
-filler while the server recalls student memory and searches course PDFs.
-Make it fit the student's topic when possible, such as '소프트맥스 연산에 대해
-물으신 거 맞죠?', or say '잠시만요. 강의 자료를 찾아볼게요.' Do not answer the
-question, explain the concept, mention sources, read equations, or call tools.
-The server will request a separate final response after the context is ready.
+VOICE_TOOL_PROMPT = """
+# Realtime context and filler
+In this realtime session, context is not preloaded. For lecture, PDF, or course
+concept questions, call search_course_materials before answering. Call
+recall_weak_concepts only when learner history would improve the teaching step.
+Use search_trusted_web only when course search is insufficient.
+
+Only immediately before calling search_course_materials, recall_weak_concepts,
+or search_trusted_web, say exactly one short topic-specific Korean filler. Do
+not say a filler before show_visualization, after a tool result, or on a turn
+with no slow tool call. Answer greetings, thanks, casual conversation, and
+simple questions directly without a filler.
 """.strip()
+
+VOICE_CONTEXT_TOOLS = [{
+    "type": "function",
+    "name": "recall_weak_concepts",
+    "description": (
+        "Recall learner weaknesses relevant to the current topic. Call only when "
+        "learner history would improve the teaching step."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string",
+                "description": "Current question or concept.",
+            }
+        },
+        "required": ["topic"],
+        "additionalProperties": False,
+    },
+}, {
+    "type": "function",
+    "name": "search_course_materials",
+    "description": "Search uploaded course PDFs before answering course-content questions.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Focused terms from the student's question.",
+            }
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}]
 
 
 def persona(mode: str) -> str:
-    """Return the lightweight session persona used for dynamic filler turns."""
+    """Return the shared teaching policy with conditional realtime fillers."""
     return (
-        "You are KINGO VOICE TA for a Sungkyunkwan University student. "
-        "Speak natural polite Korean.\n\n"
-        f"{VOICE_FILLER_PROMPT}"
+        f"{SYSTEM_PROMPT}\n\n"
+        f"{MODE_PROMPTS.get(mode, MODE_PROMPTS['socratic'])}\n\n"
+        f"{VOICE_TOOL_PROMPT}"
     )
 
 
-def answer_persona(mode: str, context: dict) -> str:
-    """Return the same final-answer policy used by the text path."""
-    return answer_instructions(mode, context)
-
-
 def json_schemas() -> list[dict]:
-    """Expose only optional realtime tools; mandatory retrieval is server-side."""
-    return [{"type": "function", **tool["function"]} for tool in TOOLS]
+    """Expose course retrieval plus the existing optional realtime tools."""
+    return [*VOICE_CONTEXT_TOOLS, *(
+        {"type": "function", **tool["function"]} for tool in TOOLS
+    )]
 
 
 async def run_tool(name: str, args: dict) -> object:

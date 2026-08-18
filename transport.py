@@ -37,6 +37,11 @@ class AgentTextDelta:
 
 
 @dataclass(frozen=True)
+class AgentTextBoundary:
+    pass
+
+
+@dataclass(frozen=True)
 class AgentTurnDone:
     pass
 
@@ -59,7 +64,7 @@ class Failed:
     message: str
 
 
-Event = SessionReady | UserStartedSpeaking | UserStoppedSpeaking | AgentAudio | AgentTextDelta | AgentTurnDone | Transcript | ToolCalled | Failed
+Event = SessionReady | UserStartedSpeaking | UserStoppedSpeaking | AgentAudio | AgentTextDelta | AgentTextBoundary | AgentTurnDone | Transcript | ToolCalled | Failed
 
 
 class Transport(ABC):

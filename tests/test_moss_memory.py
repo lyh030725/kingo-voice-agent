@@ -214,8 +214,8 @@ class MossMemoryStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             asyncio.run(scenario(Path(directory) / "weak-concepts.json"))
 
-    def test_missing_credentials_fail_before_sdk_load(self):
-        async def scenario():
+    def test_missing_credentials_use_local_memory_before_sdk_load(self):
+        async def scenario(local_path):
             with patch.dict(
                 os.environ,
                 {"MOSS_PROJECT_ID": "", "MOSS_PROJECT_KEY": ""},
@@ -224,14 +224,17 @@ class MossMemoryStoreTests(unittest.TestCase):
                 store = MossMemoryStore(
                     project_id="",
                     project_key="",
+                    local_path=local_path,
                     sdk_loader=lambda: self.fail(
                         "SDK must not load without credentials"
                     ),
                 )
-                with self.assertRaisesRegex(RuntimeError, "MOSS_PROJECT_ID"):
-                    await store.initialize()
+                saved = await store.save("과목", "개념", "질문", "어려움")
+                self.assertTrue(store.is_local_mode)
+                self.assertEqual(saved["storage"], "local")
 
-        asyncio.run(scenario())
+        with tempfile.TemporaryDirectory() as directory:
+            asyncio.run(scenario(Path(directory) / "weak-concepts.json"))
 
 
 if __name__ == "__main__":

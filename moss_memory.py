@@ -93,33 +93,9 @@ class MossMemoryStore:
     def is_local_mode(self) -> bool:
         return self._local_mode
 
-    @staticmethod
-    def _is_quota_error(exc: Exception) -> bool:
-        status = getattr(exc, "status_code", None)
-        if status is None:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-        message = str(exc).casefold().replace("_", " ")
-        return status in {402, 429} or any(
-            marker in message
-            for marker in (
-                "quota",
-                "usage limit",
-                "usage exceeded",
-                "limit exceeded",
-                "resource exhausted",
-                "insufficient credit",
-                "credit balance",
-                "payment required",
-                "free tier limit",
-                "사용 한도",
-            )
-        )
-
     def _activate_local_mode(self, exc: Exception) -> bool:
-        if not self._is_quota_error(exc):
-            return False
         if not self._local_mode:
-            log.warning("Moss usage limit reached; using local weak-concept memory: %s", exc)
+            log.warning("Moss unavailable; using local weak-concept memory: %s", exc)
         self._local_mode = True
         push_task = self._push_task
         if (
@@ -151,8 +127,8 @@ class MossMemoryStore:
         async with self._initialize_lock:
             if self._session is not None or self._local_mode:
                 return
-            self._require_credentials()
             try:
+                self._require_credentials()
                 self._sdk = self._sdk_loader()
                 self._client = self._sdk.MossClient(self.project_id, self.project_key)
                 self._session = await self._client.session(
@@ -160,9 +136,8 @@ class MossMemoryStore:
                     model_id=self.model_id,
                 )
             except Exception as exc:
-                if self._activate_local_mode(exc):
-                    return
-                raise
+                self._activate_local_mode(exc)
+                return
             log.info(
                 "Moss memory ready: index=%s docs=%s model=%s",
                 self.index_name,
@@ -318,9 +293,8 @@ class MossMemoryStore:
                 await self._session.add_docs([self._document(memory)])
                 self._dirty = True
         except Exception as exc:
-            if self._activate_local_mode(exc):
-                return await self._save_local(fields)
-            raise
+            self._activate_local_mode(exc)
+            return await self._save_local(fields)
 
         await self._upsert_local(memory)
         self._schedule_push()
@@ -363,9 +337,8 @@ class MossMemoryStore:
                 await self._session.add_docs([self._document(memory)])
                 self._dirty = True
         except Exception as exc:
-            if self._activate_local_mode(exc):
-                return await self._review_local(memory_id, correct)
-            raise
+            self._activate_local_mode(exc)
+            return await self._review_local(memory_id, correct)
 
         await self._upsert_local(memory)
         self._schedule_push()
@@ -439,9 +412,8 @@ class MossMemoryStore:
             async with self._operation_lock:
                 result = await self._session.query(topic, options)
         except Exception as exc:
-            if self._activate_local_mode(exc):
-                return await self._recall_local(topic, top_k)
-            raise
+            self._activate_local_mode(exc)
+            return await self._recall_local(topic, top_k)
         memories = [
             memory
             for doc in result.docs
@@ -517,9 +489,8 @@ class MossMemoryStore:
             async with self._operation_lock:
                 docs = await self._session.get_docs()
         except Exception as exc:
-            if self._activate_local_mode(exc):
-                return await self.all_memories()
-            raise
+            self._activate_local_mode(exc)
+            return await self.all_memories()
         return [
             memory
             for doc in docs
@@ -541,8 +512,7 @@ class MossMemoryStore:
                 self._dirty = False
                 log.info("Moss memory synced to cloud: %s", self.index_name)
         except Exception as exc:
-            if not self._activate_local_mode(exc):
-                log.exception("Moss memory cloud sync failed; next save will retry")
+            self._activate_local_mode(exc)
 
     async def flush(self) -> None:
         """Wait for a scheduled cloud push, or persist dirty data immediately."""

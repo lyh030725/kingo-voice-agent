@@ -341,13 +341,20 @@ MODE_PROMPTS = {
     ),
     "socratic": """
 Socratic mode:
-Help the student derive the answer instead of explaining it.
+Your goal is to make the student perform the next reasoning step.
 
-- *DO NOT* reveal the answer before the student reaches it.
-- Ask exactly one short question at a time.
-- If partly correct, confirm only that part and ask the next question.
-- If wrong or stuck, give only a small hint and make the question easier.
-- Explain directly only when the student explicitly asks for the answer.
+- On the first turn about a concept, never explain or summarize the answer.
+- Start by identifying the first prerequisite or decision needed.
+- Ask exactly one question that the student can answer in one short sentence.
+- Do not include the answer, a worked example, or a disguised explanation
+  before or after the question.
+- If partly correct, acknowledge only the correct part and ask for the next step.
+- After the first wrong or "I don't know" response, give one minimal hint,
+  then ask an easier question.
+- After two unsuccessful attempts at the same step, ask whether the student
+  wants another hint or a direct explanation.
+- Give a direct explanation only after the student explicitly chooses it.
+- End every response with exactly one question.
 - Maximum two short spoken sentences.
 """,
 }
@@ -772,12 +779,18 @@ async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
     """
     started_at = time.perf_counter()
     stage = {
+        "recall_weak_concepts": "recall",
+        "search_course_materials": "pdf",
         "search_trusted_web": "web",
         "show_visualization": "visual",
     }.get(name, "tool")
     log.info("tool call name=%s args=%s", name, _tool_log_value(args))
     try:
-        if name == "search_trusted_web":
+        if name == "recall_weak_concepts":
+            result = await recall_weak_concepts(**args)
+        elif name == "search_course_materials":
+            result = await asyncio.to_thread(search_course_materials, **args)
+        elif name == "search_trusted_web":
             result = await asyncio.to_thread(
                 search_trusted_web,
                 pdf_evidence_insufficient=True,

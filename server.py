@@ -43,6 +43,7 @@ from brain import (
 )
 from transport import (
     AgentAudio,
+    AgentTextBoundary,
     AgentTextDelta,
     AgentTurnDone,
     Failed,
@@ -396,6 +397,8 @@ async def pump_provider_events(ws: WebSocket, transport: Transport) -> None:
                     })
                 case AgentTextDelta(text=text) if text:
                     await ws.send_json({"type": "token", "text": text})
+                case AgentTextBoundary():
+                    await ws.send_json({"type": "text_boundary"})
                 case AgentTurnDone():
                     speaking = False
                     await ws.send_json({"type": "turn_done"})
