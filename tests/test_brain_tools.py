@@ -41,10 +41,6 @@ class FakeClient:
     def __init__(self) -> None:
         self.messages = iter([
             SimpleNamespace(content=None, tool_calls=[
-                ToolCall("recall", "recall_weak_concepts", {"topic": "attention"}),
-                ToolCall("pdf", "search_course_materials", {"query": "attention"}),
-            ]),
-            SimpleNamespace(content=None, tool_calls=[
                 ToolCall("web", "search_trusted_web", {
                     "query": "attention paper",
                     "reason": "PDF 설명이 불충분함",
@@ -58,6 +54,8 @@ class FakeClient:
                     "points": [],
                     "x_label": "",
                     "y_label": "",
+                    "file": "",
+                    "page": 0,
                 }),
             ]),
             SimpleNamespace(
@@ -84,7 +82,7 @@ class BrainToolTests(unittest.TestCase):
     def tearDown(self) -> None:
         brain.HISTORY.clear()
 
-    def test_all_schemas_execute_through_dispatcher(self) -> None:
+    def test_text_prefetches_mandatory_context_then_exposes_only_optional_tools(self) -> None:
         fake_client = FakeClient()
         with (
             patch.object(brain, "xai_client", return_value=fake_client),
@@ -96,7 +94,10 @@ class BrainToolTests(unittest.TestCase):
             patch.object(
                 brain,
                 "search_course_materials",
-                return_value=json.dumps({"found": True, "results": []}),
+                return_value=json.dumps({
+                    "found": True,
+                    "results": [{"source": "week3.pdf p.7", "excerpt": "attention"}],
+                }),
             ) as course_search,
             patch.object(
                 brain,
@@ -108,59 +109,52 @@ class BrainToolTests(unittest.TestCase):
             ) as web_search,
             patch.object(brain.EXTERNAL_BRAIN, "schedule") as schedule,
         ):
+            timer = brain.StageTimer()
             reply, tools, sources, visualizations = asyncio.run(
-                brain.think("Query와 Key를 왜 곱해?", brain.StageTimer())
+                brain.think("Query와 Key를 왜 곱해?", timer)
             )
 
         self.assertEqual(
             {tool["function"]["name"] for tool in brain.TOOLS},
-            {
-                "recall_weak_concepts",
-                "search_course_materials",
-                "search_trusted_web",
-                "show_visualization",
-            },
+            {"search_trusted_web", "show_visualization"},
         )
-        self.assertEqual(set(tools), {
-            "recall_weak_concepts",
-            "search_course_materials",
-            "search_trusted_web",
-            "show_visualization",
-        })
-        self.assertEqual(fake_client.calls[0]["tool_choice"], "required")
+        self.assertEqual(set(tools), {"search_trusted_web", "show_visualization"})
+        self.assertEqual(fake_client.calls[0]["tool_choice"], "auto")
         self.assertEqual(fake_client.calls[0]["max_completion_tokens"], 1200)
         self.assertNotIn("response_format", fake_client.calls[0])
-        self.assertEqual(fake_client.calls[1]["tool_choice"], "auto")
         self.assertTrue(fake_client.calls[0]["parallel_tool_calls"])
         self.assertEqual(
-            sum(message["role"] == "tool" for message in fake_client.calls[2]["messages"]),
-            4,
+            sum(message["role"] == "tool" for message in fake_client.calls[1]["messages"]),
+            2,
         )
-        recall.assert_awaited_once_with(topic="attention")
-        course_search.assert_called_once_with(query="attention")
+        system_prompt = fake_client.calls[0]["messages"][0]["content"]
+        self.assertIn("# Preloaded context", system_prompt)
+        self.assertIn("week3.pdf p.7", system_prompt)
+        self.assertNotIn("recall_weak_concepts", system_prompt)
+        self.assertNotIn("search_course_materials", system_prompt)
+        recall.assert_awaited_once_with("Query와 Key를 왜 곱해?")
+        course_search.assert_called_once_with("Query와 Key를 왜 곱해?")
         web_search.assert_called_once_with(
             pdf_evidence_insufficient=True,
             query="attention paper",
             reason="PDF 설명이 불충분함",
         )
+        self.assertIn("recall", timer.timings_ms)
+        self.assertIn("pdf", timer.timings_ms)
         schedule.assert_called_once()
         self.assertNotIn("https://arxiv.org/abs/1706.03762", reply)
         self.assertEqual(sources, ["https://arxiv.org/abs/1706.03762"])
         self.assertEqual(visualizations[0]["kind"], "formula")
         self.assertEqual(visualizations[0]["title"], "Attention 가중치")
 
-    def test_confusion_does_not_force_save_without_model_tool_call(self) -> None:
-        messages = iter([
-            SimpleNamespace(content=None, tool_calls=[
-                ToolCall("recall", "recall_weak_concepts", {"topic": "attention"}),
-                ToolCall("pdf", "search_course_materials", {"query": "attention"}),
-            ]),
-            SimpleNamespace(content="어느 부분부터 막히는지 같이 찾아볼까요?", tool_calls=[]),
-        ])
+    def test_text_can_answer_without_optional_tool_call_after_prefetch(self) -> None:
         client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
-            create=lambda **_kwargs: SimpleNamespace(
-                choices=[SimpleNamespace(message=next(messages))],
-            ),
+            create=lambda **_kwargs: SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    content="어느 부분부터 막히는지 같이 찾아볼까요?",
+                    tool_calls=[],
+                )
+            )]),
         )))
 
         with (
@@ -169,20 +163,22 @@ class BrainToolTests(unittest.TestCase):
                 brain,
                 "recall_weak_concepts",
                 new=AsyncMock(return_value=json.dumps({"found": False, "memories": []})),
-            ),
+            ) as recall,
             patch.object(
                 brain,
                 "search_course_materials",
                 return_value=json.dumps({"found": False, "results": []}),
-            ),
+            ) as course_search,
             patch.object(brain.EXTERNAL_BRAIN, "schedule") as schedule,
         ):
             _reply, tools, _sources, _visualizations = asyncio.run(
                 brain.think("Self-Attention을 잘 모르겠어", brain.StageTimer())
             )
 
+        recall.assert_awaited_once_with("Self-Attention을 잘 모르겠어")
+        course_search.assert_called_once_with("Self-Attention을 잘 모르겠어")
         schedule.assert_called_once()
-        self.assertNotIn("save_weak_concept", tools)
+        self.assertEqual(tools, [])
 
     def test_stream_completion_emits_each_text_delta(self) -> None:
         chunks = iter([
@@ -294,6 +290,8 @@ class BrainToolTests(unittest.TestCase):
         for target in (
             brain.recall_weak_concepts,
             brain.search_course_materials,
+            brain.prefetch_context,
+            brain.answer_instructions,
             brain.search_trusted_web,
             brain.show_visualization,
             brain.run_tool,
