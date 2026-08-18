@@ -18,8 +18,8 @@ VOICE_FILLER_PROMPT = """
 Immediately before the first tool call, if one is later needed, the first
 response after each student turn must already have said exactly one short Korean
 filler while the server recalls student memory and searches course PDFs.
-Make it fit the student's topic when possible, for example '소프트맥스 자료를
-찾아볼게요.' or '그 부분을 강의 자료에서 확인해볼게요.' Do not answer the
+Make it fit the student's topic when possible, such as '소프트맥스 연산에 대해
+물으신 거 맞죠?', or say '잠시만요. 강의 자료를 찾아볼게요.' Do not answer the
 question, explain the concept, mention sources, read equations, or call tools.
 The server will request a separate final response after the context is ready.
 """.strip()
