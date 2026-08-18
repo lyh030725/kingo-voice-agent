@@ -55,8 +55,8 @@ class GrokTransport(Transport):
         self._discard_response_output = False
         self._conversation: list[dict[str, str]] = []
         self._assessment_scheduled = False
-        self._next_response_phase = "filler"
-        self._current_response_phase = "filler"
+        self._next_response_phase = "answer"
+        self._current_response_phase = "answer"
         self._prefetch_task: asyncio.Task | None = None
         self._answer_request_task: asyncio.Task | None = None
         self._turn_context: dict | None = None
@@ -149,6 +149,7 @@ class GrokTransport(Transport):
                         self._discard_response_output = True
                         await self._send({"type": "response.cancel"})
                 elif kind == "input_audio_buffer.speech_stopped":
+                    self._next_response_phase = "filler"
                     yield UserStoppedSpeaking()
                 elif kind == "response.output_audio.delta":
                     if self._discard_response_output:
@@ -187,19 +188,27 @@ class GrokTransport(Transport):
                         self._response_transcript = ""
                         self._response_transcript_emitted = False
                         self._response_done = False
-                        self._next_response_phase = "filler"
+                        self._next_response_phase = "answer"
                         yield AgentTurnDone()
-                    elif self._current_response_phase == "filler":
-                        self._response_transcript = ""
-                        self._response_transcript_emitted = False
-                        self._response_done = False
-                        self._schedule_answer_response()
                     elif self._tools_this_turn:
                         self._tools_this_turn = 0
                         self._response_transcript = ""
                         self._response_transcript_emitted = False
                         self._response_done = False
-                        await self._request_answer_response()
+                        if (
+                            self._turn_context is None
+                            and self._prefetch_task is None
+                            and not self._last_user_transcript
+                        ):
+                            self._next_response_phase = "answer"
+                            await self._send({"type": "response.create"})
+                        else:
+                            await self._request_answer_response()
+                    elif self._current_response_phase == "filler":
+                        self._response_transcript = ""
+                        self._response_transcript_emitted = False
+                        self._response_done = False
+                        self._schedule_answer_response()
                     else:
                         self._response_done = True
                         self._response_transcript = self._response_transcript or _transcript_from_response(event)
@@ -207,7 +216,7 @@ class GrokTransport(Transport):
                             yield Transcript("agent", self._response_transcript)
                             self._response_transcript_emitted = True
                         self._schedule_assessment()
-                        self._next_response_phase = "filler"
+                        self._next_response_phase = "answer"
                         yield AgentTurnDone()
                 elif kind in {
                     "conversation.item.input_audio_transcription.updated",
@@ -273,7 +282,7 @@ class GrokTransport(Transport):
         self._turn_context = None
         self._last_user_transcript = ""
         self._user_transcript_ready.clear()
-        self._next_response_phase = "filler"
+        self._next_response_phase = "answer"
 
     def _cancel_answer_request(self) -> None:
         if self._answer_request_task is not None and not self._answer_request_task.done():
