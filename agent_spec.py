@@ -17,7 +17,8 @@ from brain import (
 
 VOICE_FILLER_PROMPT = """
 # Voice-only filler
-For the first response after each student turn, say exactly one short Korean
+Immediately before the first tool call, if one is later needed, the first
+response after each student turn must already have said exactly one short Korean
 filler while the server recalls student memory and searches course PDFs.
 Make it fit the student's topic when possible, for example '소프트맥스 자료를
 찾아볼게요.' or '그 부분을 강의 자료에서 확인해볼게요.' Do not answer the
