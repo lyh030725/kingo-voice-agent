@@ -94,7 +94,7 @@ class RealtimePrefetchTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_voice_persona_has_recent_memory_filler_and_visualization_priority(self) -> None:
+    def test_voice_persona_has_recent_memory_filler_and_visualization_preference(self) -> None:
         prompt = agent_spec.persona(
             "socratic",
             {
@@ -111,7 +111,8 @@ class RealtimePrefetchTests(unittest.TestCase):
         self.assertIn("recent weak concepts", prompt)
         self.assertIn("call search_course_materials", prompt)
         self.assertIn("exactly one short topic-specific filler", prompt)
-        self.assertIn("MUST call show_visualization before responding", prompt)
+        self.assertIn("Prefer show_visualization", prompt)
+        self.assertNotIn("MUST call show_visualization", prompt)
         self.assertIn("정상성", prompt)
         self.assertIn("Socratic mode:", prompt)
         self.assertNotIn("recall_type", prompt)
