@@ -23,9 +23,11 @@ must not reveal formula or visual data; never guess search results. Follow instr
 returned by search tools. Use search_trusted_web only if course evidence is insufficient.
 
 # Visualization
-Visualization is part of teaching, not decoration. Prefer show_visualization when
-a formula, process, structure, or PDF page clarifies the current step. In Socratic
-mode, use it as a clue, not the
+Visualization is part of teaching, not decoration. Use show_visualization proactively
+whenever a formula, process, structure, or relevant PDF page can support the current
+step. Default to a visual before explaining or asking about such content; skip it only
+when it adds no useful information. Prefer show_visualization over speech-only teaching.
+In Socratic mode, use it as a clue, not the
 final answer. Keep raw formulas/visual data in the tool; speak only their meaning.
 All user-visible visualization text MUST be Korean; formulas/standard terms may remain.
 
@@ -60,10 +62,11 @@ VOICE_VISUALIZATION_TOOL = {
     "type": "function",
     "name": "show_visualization",
     "description": (
-        "Show the visual needed for the current teaching step. Use formula for an "
-        "equation or variable relationship, flow for a process or structure, and pdf "
-        "for an exact returned course page. Prefer a useful visual clue over verbalizing "
-        "raw visual data."
+        "Proactively show a visual whenever a formula, process, structure, or relevant "
+        "course PDF page can help the student reason. Prefer calling this tool over "
+        "describing such content only with speech. Use formula for an equation or "
+        "variable relationship, flow for a process or structure, and pdf for an exact "
+        "returned course page."
     ),
     "parameters": {
         "oneOf": [
@@ -148,8 +151,9 @@ COURSE_RESULT_INSTRUCTION = {
         "question instead of giving the answer."
     ),
     "visualization": (
-        "Prefer show_visualization when a formula, structure, process, or useful PDF page "
-        "could help the learner reason. Use it as a clue, not the final answer."
+        "Prefer show_visualization. If this evidence contains a useful formula, "
+        "structure, process, or PDF page, use it before continuing the teaching step. "
+        "Use it as a clue, not the final answer."
     ),
 }
 
@@ -162,7 +166,8 @@ WEB_RESULT_INSTRUCTION = {
         "question instead of giving the answer."
     ),
     "visualization": (
-        "Prefer show_visualization when a formula, structure, or process could help reasoning."
+        "Prefer show_visualization. If this evidence contains a useful formula, "
+        "structure, or process, use it before continuing the teaching step."
     ),
     "sources": "Do not read raw URLs aloud.",
 }
