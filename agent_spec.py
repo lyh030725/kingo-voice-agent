@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from brain_runtime import (
+    MEMORY_TEACHING_POLICY,
     MODE_PROMPTS,
     TOOLS,
     StageTimer,
@@ -23,8 +24,11 @@ and conversational.
 
 # Learner memory
 Relevant learner-memory context is automatically prepared by the server and
-included below. Use it to personalize hints and check prerequisites. There is
-no learner-memory retrieval tool, so never ask for or call one.
+included below. There is no learner-memory retrieval tool, so never ask for or
+call one. When a relevant weak concept is present, make the personalization
+noticeable but natural: briefly connect the current topic to the learner's
+recorded past difficulty, then adapt the teaching action to that weak point.
+Never invent a past difficulty when memory says `found=false`.
 
 # Course retrieval and filler
 Course-PDF evidence is NOT preloaded in realtime voice. For lecture, PDF, or
@@ -78,6 +82,7 @@ def persona(mode: str, memory_context: dict | None = None) -> str:
     return (
         f"{VOICE_SYSTEM_PROMPT}\n\n"
         f"{MODE_PROMPTS.get(mode, MODE_PROMPTS['socratic'])}\n\n"
+        f"{MEMORY_TEACHING_POLICY}\n\n"
         "# Preloaded learner memory\n"
         f"{memory_json}"
     )
