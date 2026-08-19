@@ -23,6 +23,41 @@ SYSTEM_PROMPT = legacy.SYSTEM_PROMPT
 MODE_PROMPTS = legacy.MODE_PROMPTS
 TOOLS = legacy.TOOLS
 MAX_HISTORY_MESSAGES = legacy.MAX_HISTORY_MESSAGES
+MEMORY_BOOTSTRAP_LIMIT = int(os.environ.get("MEMORY_BOOTSTRAP_LIMIT", "5"))
+
+MEMORY_TEACHING_POLICY = """
+# Learner-memory teaching policy
+Learner memory is a real record of this student's prior difficulty, not generic
+background. Use it only when relevant, but make relevant personalization visible.
+
+- `recall_type=recent` means the learner is asking about prior/recent learning.
+  Answer from the memory records directly. Briefly say what concept(s) were
+  recently difficult and what the recorded difficulty was. Phrase this as
+  "기록을 보면" or "지난번에는" so you do not pretend the weak-concept log is a
+  complete study-history log. Do not search the course PDF just to answer what
+  the learner previously struggled with.
+- `recall_type=semantic` means the records were retrieved for the current topic.
+  If an unresolved memory is the same concept as the current question or a
+  necessary prerequisite, explicitly connect it to the current turn once, for
+  example "전에 이 부분에서 조금 막혔었어요." Do not expose memory IDs or raw
+  metadata.
+- In Socratic mode, when such an unresolved memory is directly relevant, use
+  retrieval practice before a new explanation: ask exactly one short question
+  targeted at the recorded `difficulty_note`. Do not reveal the answer in that
+  question. If the student answers correctly, continue to the current topic; if
+  they are wrong or say they do not know, give the normal minimal hint.
+- In explanation mode, do not force a quiz first. Briefly acknowledge the prior
+  difficulty and tailor the explanation/example to that exact weak point, then
+  ask the normal understanding-check question.
+- `recall_type=bootstrap` is recent weak-concept context loaded when the realtime
+  session starts. Treat it as background until the current turn clearly matches
+  one of those concepts or asks about recent learning; then it may be used the
+  same way as semantic/recent memory.
+- Do not force review for memories that are merely related but not prerequisites,
+  or for memories with status `mastered`. Do not repeat the same memory
+  acknowledgement over and over in one conversation.
+- If no memory is found, never invent a past difficulty.
+""".strip()
 
 _for_speech = legacy._for_speech
 add_trusted_domain = legacy.add_trusted_domain
@@ -47,9 +82,91 @@ def remove_course_material(filename: str) -> None:
     clear_embedding_cache()
 
 
+def _is_recent_memory_query(topic: str) -> bool:
+    """Detect generic questions about the learner's recent/past learning."""
+    normalized = " ".join(topic.casefold().split())
+    markers = (
+        "저번에 공부", "지난번에 공부", "전에 공부", "최근에 공부", "뭐 공부했",
+        "뭘 공부했", "무엇을 공부", "어떤 걸 공부", "어떤 거 공부", "마지막으로 공부",
+        "저번에 뭐", "지난번에 뭐", "최근에 뭐", "전에 뭐 어려", "저번에 어려",
+        "지난번에 어려", "최근에 어려", "내 취약 개념", "내가 취약", "내가 어려워",
+        "기억하고 있는 취약", "last time", "recently studied", "previously studied",
+        "what did i study", "what was i weak at",
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def _memory_record(memory: dict) -> dict:
+    """Return only learner-memory fields useful to the teaching model."""
+    return {
+        "memory_id": memory.get("id") or memory.get("memory_id", ""),
+        "course": memory.get("course", ""),
+        "concept": memory.get("concept", ""),
+        "original_question": memory.get("original_question", ""),
+        "difficulty_note": memory.get("difficulty_note", ""),
+        "status": memory.get("status", "new"),
+        "confidence": float(memory.get("confidence", 0) or 0),
+        "failure_count": int(memory.get("failure_count", 0) or 0),
+        "success_count": int(memory.get("success_count", 0) or 0),
+        "saved_at": float(memory.get("saved_at", 0) or 0),
+        "last_seen_at": float(memory.get("last_seen_at", 0) or 0),
+        "next_review_at": float(memory.get("next_review_at", 0) or 0),
+    }
+
+
+def _memory_response(topic: str, memories: list[dict], recall_type: str, storage: str) -> dict:
+    records = [_memory_record(memory) for memory in memories]
+    return {
+        "found": bool(records),
+        "topic": topic,
+        "storage": storage,
+        "recall_type": recall_type,
+        "memories": records,
+    }
+
+
+async def recent_weak_concepts(
+    student_id: str = "default-student",
+    *,
+    top_k: int = MEMORY_BOOTSTRAP_LIMIT,
+    topic: str = "recent learner memory",
+    recall_type: str = "recent",
+) -> dict:
+    """Return the learner's most recently seen weak concepts."""
+    store = memory_for(student_id)
+    memories = await store.all_memories()
+    memories.sort(
+        key=lambda item: (
+            float(item.get("last_seen_at", 0) or 0),
+            float(item.get("saved_at", 0) or 0),
+        ),
+        reverse=True,
+    )
+    return _memory_response(topic, memories[:top_k], recall_type, "recent")
+
+
+async def bootstrap_memory_context(student_id: str = "default-student") -> dict:
+    """Load a small recent-memory snapshot before a realtime session starts."""
+    return await recent_weak_concepts(
+        student_id,
+        top_k=MEMORY_BOOTSTRAP_LIMIT,
+        topic="realtime session bootstrap",
+        recall_type="bootstrap",
+    )
+
+
 async def recall_weak_concepts(topic: str, student_id: str = "default-student") -> str:
-    """Recall relevant learner memory without exposing it as a model tool."""
-    return json.dumps(await memory_for(student_id).recall(topic), ensure_ascii=False)
+    """Recall relevant or recent learner memory without exposing a model tool."""
+    topic = topic.strip()
+    if _is_recent_memory_query(topic):
+        result = await recent_weak_concepts(student_id, topic=topic, recall_type="recent")
+        return json.dumps(result, ensure_ascii=False)
+
+    result = await memory_for(student_id).recall(topic)
+    if isinstance(result, dict):
+        result = dict(result)
+        result["recall_type"] = "semantic"
+    return json.dumps(result, ensure_ascii=False)
 
 
 def search_course_materials(query: str) -> str:
@@ -199,12 +316,13 @@ async def think(
     visualizations: list[dict] = []
 
     def completion_request() -> dict:
+        instructions = f"{legacy.answer_instructions(mode, context)}\n\n{MEMORY_TEACHING_POLICY}"
         return {
             "model": os.environ.get("CHAT_MODEL", "grok-4.3"),
             "reasoning_effort": os.environ.get("CHAT_REASONING_EFFORT", "none"),
             "max_completion_tokens": int(os.environ.get("CHAT_MAX_TOKENS", "1200")),
             "messages": [
-                {"role": "system", "content": legacy.answer_instructions(mode, context)},
+                {"role": "system", "content": instructions},
                 *history,
                 *tool_messages,
             ],
