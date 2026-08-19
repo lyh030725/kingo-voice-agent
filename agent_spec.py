@@ -21,8 +21,8 @@ For course or PDF questions, say exactly one short topic-specific filler, then
 call search_course_materials. Only immediately before calling search_course_materials
 may you use filler. Do not say a
 filler before show_visualization or after a tool result.
-Follow the teaching, grounding, and visualization instructions returned by
-search_course_materials. Use search_trusted_web only if course evidence is insufficient.
+Follow instructions returned by search tools. Use search_trusted_web only if
+course evidence is insufficient.
 
 # Visualization
 Use show_visualization when a visual materially helps learning. Keep raw formulas,
@@ -80,6 +80,31 @@ COURSE_RESULT_INSTRUCTION = {
     ),
 }
 
+WEB_RESULT_INSTRUCTION = {
+    "grounding": (
+        "Use only the returned trusted-web evidence for factual claims that were not "
+        "supported by course material. Do not add unsupported facts from memory."
+    ),
+    "teaching": (
+        "In Socratic mode, treat the web answer as private teaching evidence rather than "
+        "a learner-facing final answer. Do not reveal the conclusion before the learner "
+        "attempts the reasoning step. Ask exactly one short reasoning question that "
+        "targets the smallest next step. After a wrong answer or an explicit 'I don't "
+        "know', give only one minimal hint that does not contain the answer, then ask one "
+        "easier question. In explain mode, explain directly from the evidence."
+    ),
+    "visualization": (
+        "If a visual would materially help the learner reason about the trusted-web "
+        "evidence, call show_visualization before continuing. Use formula for equations, "
+        "flow for processes or structures, and plot for numeric relationships. Do not "
+        "visualize unnecessarily, and do not say a filler before show_visualization."
+    ),
+    "sources": (
+        "The UI displays trusted source URLs separately. Do not read or repeat raw URLs "
+        "in the spoken answer."
+    ),
+}
+
 _SOURCE_PAGE_RE = re.compile(r"^(?P<file>.+?)\s+p\.(?P<page>\d+)$")
 
 
@@ -98,6 +123,14 @@ def _enrich_course_result(result: dict) -> dict:
             item.setdefault("page", int(match.group("page")))
 
     result["instruction"] = COURSE_RESULT_INSTRUCTION
+    return result
+
+
+def _enrich_web_result(result: dict) -> dict:
+    """Attach actionable teaching guidance to successful trusted-web retrieval."""
+    if not result.get("found"):
+        return result
+    result["instruction"] = WEB_RESULT_INSTRUCTION
     return result
 
 
@@ -125,4 +158,6 @@ async def run_tool(name: str, args: dict) -> object:
     result = json.loads(await run_brain_tool(name, args, StageTimer()))
     if name == "search_course_materials" and isinstance(result, dict):
         return _enrich_course_result(result)
+    if name == "search_trusted_web" and isinstance(result, dict):
+        return _enrich_web_result(result)
     return result
