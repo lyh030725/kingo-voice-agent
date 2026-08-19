@@ -169,6 +169,7 @@ MODE_PROMPTS = {
         "one concrete example, then ask one short understanding-check question."
     ),
     "socratic": """
+*IMPORTANT*
 Socratic mode:
 Your goal is to make the student perform the next reasoning step.
 

@@ -25,6 +25,8 @@ course evidence is insufficient.
 
 # Visualization
 Visualization is part of teaching, not decoration.
+For course concepts involving a formula, process, structure, or PDF page,
+MUST use show_visualization before asking the Socratic question.
 When the current reasoning step is best understood through a formula, process,
 structure, or PDF page, MUST call show_visualization before responding.
 In Socratic mode, use the visual to support the next reasoning step without
