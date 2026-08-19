@@ -98,10 +98,10 @@ class GrokTransport(Transport):
             )
         except TimeoutError:
             log.warning("realtime memory bootstrap timed out student=%s", self.student_id)
-            self._memory_context = {"found": False, "recall_type": "bootstrap"}
+            self._memory_context = {"found": False}
         except Exception:
             log.exception("realtime memory bootstrap failed student=%s", self.student_id)
-            self._memory_context = {"found": False, "recall_type": "bootstrap"}
+            self._memory_context = {"found": False}
 
         self._ws = await websockets.connect(
             f"{WS_URL}?model={MODEL}",
@@ -312,7 +312,7 @@ class GrokTransport(Transport):
             context = await prefetch_memory_context(transcript, self.student_id)
             next_context = context.get("weak_concepts", context)
             if isinstance(next_context, dict) and not next_context.get("found") and "error" not in next_context:
-                next_context = {"found": False, "recall_type": next_context.get("recall_type", "semantic")}
+                next_context = {"found": False}
             if next_context == self._memory_context:
                 return
             self._memory_context = next_context
