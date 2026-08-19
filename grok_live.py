@@ -32,6 +32,7 @@ from transport import (
     UserStartedSpeaking,
     UserStoppedSpeaking,
 )
+from visual_router import decide_visualization
 
 log = logging.getLogger("grok-live")
 
@@ -42,6 +43,13 @@ READY_TIMEOUT_S = 10
 TOOL_TIMEOUT_S = 10
 MEMORY_BOOTSTRAP_TIMEOUT_S = float(
     os.environ.get("MEMORY_BOOTSTRAP_TIMEOUT_S", "2.5")
+)
+
+VISUAL_ALREADY_SHOWN_INSTRUCTION = (
+    "A relevant visual has already been shown for this turn. Do not repeat its raw "
+    "formula, labels, or visual data in speech. Use the visual as a teaching clue and "
+    "continue the current teaching mode. Do not call show_visualization again for the "
+    "same content; only call it if a different visual is genuinely needed."
 )
 
 # Compatibility for legacy tests/default single-student callers.
@@ -76,6 +84,17 @@ class GrokTransport(Transport):
         self._assessment_scheduled = False
         self._memory_context: dict = {"found": False}
         self._memory_task: asyncio.Task | None = None
+        self._local_events: asyncio.Queue = asyncio.Queue()
+
+        # server_vad automatically starts a voice response. For audio turns we cancel
+        # that first response, wait for the final transcript, let Grok make the
+        # required visual/no-visual decision, then explicitly create the real response.
+        self._visual_gate_pending = False
+        self._visual_gate_auto_response_seen = False
+        self._visual_gate_auto_response_done = False
+        self._visual_gate_decision_ready = False
+        self._visual_gate_response_requested = False
+        self._visual_gate_instruction: str | None = None
 
     async def start(self) -> None:
         key = os.environ.get("XAI_API_KEY", "").strip()
@@ -187,13 +206,19 @@ class GrokTransport(Transport):
                     },
                 }
             )
-            await self._send({"type": "response.create"})
+            visual_event, instruction = await self._prepare_visual(text)
+            if visual_event is not None:
+                await self._local_events.put(visual_event)
+            await self._create_response(instruction)
 
     async def events(self) -> AsyncIterator:
         await self._connected.wait()
         assert self._ws is not None
         try:
             async for raw in self._ws:
+                while not self._local_events.empty():
+                    yield self._local_events.get_nowait()
+
                 event = json.loads(raw)
                 kind = event.get("type", "")
                 if kind == "session.updated":
@@ -204,10 +229,23 @@ class GrokTransport(Transport):
                     self._response_transcript_emitted = False
                     self._response_done = False
                     self._response_active = True
-                    self._discard_response_output = False
+
+                    if (
+                        self._visual_gate_pending
+                        and not self._visual_gate_response_requested
+                        and not self._visual_gate_auto_response_seen
+                    ):
+                        # server_vad created this response automatically. Suppress it
+                        # until the transcript has gone through the agentic visual gate.
+                        self._visual_gate_auto_response_seen = True
+                        self._discard_response_output = True
+                        await self._send({"type": "response.cancel"})
+                    else:
+                        self._discard_response_output = False
                 elif kind == "input_audio_buffer.speech_started":
                     yield UserStartedSpeaking()
                     self._reset_for_new_speech()
+                    self._start_visual_gate()
                     self._schedule_memory_refresh()
                     if self._response_active:
                         self._response_active = False
@@ -255,12 +293,26 @@ class GrokTransport(Transport):
                 elif kind == "response.done":
                     self._response_active = False
                     if self._discard_response_output:
-                        self._tools_this_turn = 0
-                        self._discard_response_output = False
-                        self._response_transcript = ""
-                        self._response_transcript_emitted = False
-                        self._response_done = False
-                        yield AgentTurnDone()
+                        if (
+                            self._visual_gate_pending
+                            and self._visual_gate_auto_response_seen
+                            and not self._visual_gate_response_requested
+                        ):
+                            # The auto-created server_vad response was intentionally
+                            # cancelled. Do not expose a fake turn boundary to the UI.
+                            self._visual_gate_auto_response_done = True
+                            self._discard_response_output = False
+                            self._response_transcript = ""
+                            self._response_transcript_emitted = False
+                            self._response_done = False
+                            await self._maybe_start_gated_response()
+                        else:
+                            self._tools_this_turn = 0
+                            self._discard_response_output = False
+                            self._response_transcript = ""
+                            self._response_transcript_emitted = False
+                            self._response_done = False
+                            yield AgentTurnDone()
                     elif self._tools_this_turn:
                         self._tools_this_turn = 0
                         had_interim_text = bool(self._response_transcript)
@@ -285,6 +337,7 @@ class GrokTransport(Transport):
                             )
                             self._response_transcript_emitted = True
                         self._schedule_assessment()
+                        self._finish_visual_gate()
                         yield AgentTurnDone()
                 elif kind in {
                     "conversation.item.input_audio_transcription.updated",
@@ -303,6 +356,15 @@ class GrokTransport(Transport):
                         self._begin_user_turn(
                             transcript, keep_memory_task=True
                         )
+                        if self._visual_gate_pending:
+                            visual_event, instruction = await self._prepare_visual(
+                                transcript
+                            )
+                            if visual_event is not None:
+                                yield visual_event
+                            self._visual_gate_instruction = instruction
+                            self._visual_gate_decision_ready = True
+                            await self._maybe_start_gated_response()
                         if self._response_done:
                             self._schedule_assessment()
                 elif kind.endswith("output_audio_transcript.done"):
@@ -331,6 +393,9 @@ class GrokTransport(Transport):
                         )
                         continue
                     yield Failed(message)
+
+            while not self._local_events.empty():
+                yield self._local_events.get_nowait()
         except websockets.ConnectionClosed as exc:
             yield Failed(f"model connection closed: {exc}")
         finally:
@@ -347,6 +412,65 @@ class GrokTransport(Transport):
     async def _send(self, payload: dict) -> None:
         assert self._ws is not None
         await self._ws.send(json.dumps(payload))
+
+    async def _create_response(self, instruction: str | None = None) -> None:
+        payload: dict = {"type": "response.create"}
+        if instruction:
+            payload["response"] = {"instructions": instruction}
+        await self._send(payload)
+
+    async def _prepare_visual(
+        self,
+        transcript: str,
+    ) -> tuple[ToolCalled | None, str | None]:
+        decision = await decide_visualization(transcript, self._conversation)
+        if not decision.needed or not decision.args:
+            return None, None
+        try:
+            result = await asyncio.wait_for(
+                agent_spec.run_tool("show_visualization", decision.args),
+                TOOL_TIMEOUT_S,
+            )
+        except TimeoutError:
+            log.warning("visual gate render timed out")
+            return None, None
+        except Exception:
+            log.exception("visual gate render failed")
+            return None, None
+        if not isinstance(result, dict) or "error" in result:
+            log.warning("visual gate rejected render payload: %s", result)
+            return None, None
+        return (
+            ToolCalled("show_visualization", decision.args, result),
+            VISUAL_ALREADY_SHOWN_INSTRUCTION,
+        )
+
+    def _start_visual_gate(self) -> None:
+        self._visual_gate_pending = True
+        self._visual_gate_auto_response_seen = False
+        self._visual_gate_auto_response_done = False
+        self._visual_gate_decision_ready = False
+        self._visual_gate_response_requested = False
+        self._visual_gate_instruction = None
+
+    async def _maybe_start_gated_response(self) -> None:
+        if (
+            not self._visual_gate_pending
+            or not self._visual_gate_auto_response_done
+            or not self._visual_gate_decision_ready
+            or self._visual_gate_response_requested
+        ):
+            return
+        self._visual_gate_response_requested = True
+        await self._create_response(self._visual_gate_instruction)
+
+    def _finish_visual_gate(self) -> None:
+        self._visual_gate_pending = False
+        self._visual_gate_auto_response_seen = False
+        self._visual_gate_auto_response_done = False
+        self._visual_gate_decision_ready = False
+        self._visual_gate_response_requested = False
+        self._visual_gate_instruction = None
 
     def _begin_user_turn(
         self,
