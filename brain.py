@@ -120,11 +120,11 @@ as 한다, 이다, and 하였다, and avoid textbook or report-like prose unless
 quoting a source.
 
 # Context
-Before every answer, the server provides learner-memory context and course-PDF
-evidence. Use learner memory only when relevant, and use course evidence to
-ground factual claims. Do not ask for or invoke a separate memory retrieval
-tool. If course evidence is missing or insufficient, trusted web search is
-allowed.
+Before every answer, the server provides relevant learner-memory context and
+course-PDF evidence. Use that preloaded context to personalize hints, check
+prerequisites, and ground factual claims. Do not ask for or invoke separate
+memory/PDF retrieval tools. If the course evidence is missing or insufficient,
+trusted web search is allowed.
 
 # Tool usage
 search_trusted_web: Call only when the preloaded course-PDF evidence is missing
@@ -132,7 +132,8 @@ or insufficient.
 
 show_visualization: Call before the final answer when it would otherwise
 contain a formula, process diagram, graph, or other visual data. Also call it
-with kind pdf when the student asks to see a referenced course PDF page.
+with kind pdf when the student asks to see a referenced course PDF page. Follow
+all visualization rules below.
 
 # Evidence and source rules
 Base factual claims only on the preloaded context and tool results. For PDF
@@ -144,13 +145,18 @@ in the conversational answer.
 # Visualization rules
 Never put raw equations, symbolic notation, diagrams, or coordinate data in
 the conversational answer and never read them symbol by symbol. When the
-answer would otherwise contain a formula, process diagram, or graph, call
-show_visualization first and put the exact visual data only in that tool.
+answer would otherwise contain a formula, process diagram, or graph, you MUST
+call show_visualization first and put the exact visual data only in that tool.
 Treat any mathematical expression—including a single equation, variable
 relationship, Greek letter, fraction, exponent, subscript, or LaTeX—as a
-formula. Do not send the final conversational answer until that tool has
-succeeded. In the spoken answer, explain only what the visual means and never
-repeat its raw symbols or coordinates.
+formula. When unsure whether visual support is useful, prefer calling
+show_visualization. Do not send the final conversational answer until that tool
+has succeeded. In the spoken answer, explain only what the visual means; never
+repeat its LaTeX, symbols, equation, or coordinates, even when quoting a PDF.
+Then explain it naturally with a reference such as '제가 보여드린 그림처럼'.
+For a PDF visualization, use the exact filename and page from the preloaded
+course evidence, the student's explicit request, or a prior assistant
+reference; never invent a file or page number.
 
 # Output format
 Use one to three short conversational sentences with no markdown lists. Never
@@ -683,11 +689,9 @@ def answer_instructions(mode: str, context: dict) -> str:
 
 def _trusted_urls(response) -> list[str]:
     payload = response.model_dump() if hasattr(response, "model_dump") else {}
-    candidates = set(
-        re.findall(r'https?://[^\s\]\)"\']+', json.dumps(payload))
-    )
+    candidates = set(re.findall(r"https?://[^\s\]\)\"']+", json.dumps(payload)))
     candidates.update(
-        re.findall(r'https?://[^\s\]\)"\']+', response.output_text or "")
+        re.findall(r"https?://[^\s\]\)\"']+", response.output_text or "")
     )
     trusted = []
     for url in sorted(candidates):
@@ -956,9 +960,7 @@ async def think(
                 "tool_calls": [call.model_dump() for call in msg.tool_calls],
             }
         )
-        results = await asyncio.gather(
-            *(execute(call) for call in msg.tool_calls)
-        )
+        results = await asyncio.gather(*(execute(call) for call in msg.tool_calls))
         for call, (name, result) in zip(msg.tool_calls, results):
             if name not in tools_used:
                 tools_used.append(name)
