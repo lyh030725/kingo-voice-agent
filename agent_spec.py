@@ -19,14 +19,17 @@ never invent learner history.
 # Course tools
 For course or PDF questions, say exactly one short topic-specific filler, then
 call search_course_materials. Only immediately before calling search_course_materials
-may you use filler. Do not say a
-filler before show_visualization or after a tool result.
+may you use filler. Do not say a filler before show_visualization or after a tool result.
 Follow instructions returned by search tools. Use search_trusted_web only if
 course evidence is insufficient.
 
 # Visualization
-Use show_visualization when a visual materially helps learning. Keep raw formulas,
-diagram data, and coordinates in the tool; speak only their meaning.
+Visualization is part of teaching, not decoration.
+When the current reasoning step is best understood through a formula, process,
+structure, or PDF page, MUST call show_visualization before responding.
+In Socratic mode, use the visual to support the next reasoning step without
+revealing the final answer. Keep raw formulas and visual data in the tool;
+speak only their meaning.
 
 # Output
 Keep each turn short and conversational. Never read raw JSON aloud.
@@ -55,6 +58,89 @@ VOICE_COURSE_TOOL = {
     },
 }
 
+VOICE_VISUALIZATION_TOOL = {
+    "type": "function",
+    "name": "show_visualization",
+    "description": (
+        "Show the visual needed for the current teaching step. Use formula for an "
+        "equation or variable relationship, flow for a process or structure, and pdf "
+        "for an exact returned course page. Prefer a useful visual clue over verbalizing "
+        "raw visual data."
+    ),
+    "parameters": {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "const": "formula"},
+                    "title": {
+                        "type": "string",
+                        "description": "Short Korean title.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": "One concise Korean takeaway.",
+                    },
+                    "latex": {
+                        "type": "string",
+                        "description": "Raw LaTeX for the formula.",
+                    },
+                },
+                "required": ["kind", "title", "caption", "latex"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "const": "flow"},
+                    "title": {
+                        "type": "string",
+                        "description": "Short Korean title.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": "One concise Korean takeaway.",
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 8,
+                        "description": "Ordered process or structure labels.",
+                    },
+                },
+                "required": ["kind", "title", "caption", "labels"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "const": "pdf"},
+                    "title": {
+                        "type": "string",
+                        "description": "Short Korean title.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": "One concise Korean takeaway.",
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "Exact returned course PDF filename.",
+                    },
+                    "page": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Exact returned course PDF page.",
+                    },
+                },
+                "required": ["kind", "title", "caption", "file", "page"],
+                "additionalProperties": False,
+            },
+        ]
+    },
+}
+
 COURSE_RESULT_INSTRUCTION = {
     "grounding": (
         "Use the returned course evidence as the source of truth for this turn. "
@@ -70,13 +156,13 @@ COURSE_RESULT_INSTRUCTION = {
         "easier question. In explain mode, explain directly from the evidence."
     ),
     "visualization": (
-        "If a visual would materially help the learner understand or reason about the "
-        "retrieved material, call show_visualization before continuing. Choose the most "
-        "useful kind: pdf for a useful returned source page, formula for an equation or "
-        "variable relationship, flow for a process, structure, or conceptual sequence, "
-        "and plot for a numeric relationship. If you explicitly refer to a specific "
-        "returned PDF page, show that page with kind='pdf'. Do not visualize "
-        "unnecessarily, and do not say a filler before show_visualization."
+        "If the current reasoning step is best understood visually, call "
+        "show_visualization before continuing. Use pdf for a useful returned source page, "
+        "formula for an equation or variable relationship, and flow for a process, "
+        "structure, or conceptual sequence. If you explicitly refer to a specific returned "
+        "PDF page, show that page with kind='pdf'. In Socratic mode, visualize a clue for "
+        "the next reasoning step rather than the final answer. Do not say a filler before "
+        "show_visualization."
     ),
 }
 
@@ -94,10 +180,11 @@ WEB_RESULT_INSTRUCTION = {
         "easier question. In explain mode, explain directly from the evidence."
     ),
     "visualization": (
-        "If a visual would materially help the learner reason about the trusted-web "
-        "evidence, call show_visualization before continuing. Use formula for equations, "
-        "flow for processes or structures, and plot for numeric relationships. Do not "
-        "visualize unnecessarily, and do not say a filler before show_visualization."
+        "If the current reasoning step is best understood visually, call "
+        "show_visualization before continuing. Use formula for equations or variable "
+        "relationships and flow for processes or structures. In Socratic mode, visualize "
+        "a clue for the next reasoning step rather than the final answer. Do not say a "
+        "filler before show_visualization."
     ),
     "sources": (
         "The UI displays trusted source URLs separately. Do not read or repeat raw URLs "
@@ -147,9 +234,15 @@ def persona(mode: str, memory_context: dict | None = None) -> str:
 
 def json_schemas() -> list[dict]:
     """Expose exactly three conversational tools to Grok Voice."""
+    trusted_web = next(
+        {"type": "function", **tool["function"]}
+        for tool in TOOLS
+        if tool["function"]["name"] == "search_trusted_web"
+    )
     return [
         VOICE_COURSE_TOOL,
-        *({"type": "function", **tool["function"]} for tool in TOOLS),
+        trusted_web,
+        VOICE_VISUALIZATION_TOOL,
     ]
 
 

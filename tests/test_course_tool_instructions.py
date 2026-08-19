@@ -47,8 +47,9 @@ class CourseToolInstructionTests(unittest.TestCase):
         self.assertIn("Do not reveal", result["instruction"]["teaching"])
         self.assertIn("exactly one short reasoning question", result["instruction"]["teaching"])
         self.assertIn("show_visualization", result["instruction"]["visualization"])
-        for kind in ("pdf", "formula", "flow", "plot"):
+        for kind in ("pdf", "formula", "flow"):
             self.assertIn(kind, result["instruction"]["visualization"])
+        self.assertNotIn("plot", result["instruction"]["visualization"])
 
     def test_missing_course_evidence_keeps_web_fallback_instruction(self) -> None:
         raw_result = {
@@ -94,8 +95,9 @@ class CourseToolInstructionTests(unittest.TestCase):
         self.assertIn("Do not reveal", instruction["teaching"])
         self.assertIn("exactly one short reasoning question", instruction["teaching"])
         self.assertIn("show_visualization", instruction["visualization"])
-        for kind in ("formula", "flow", "plot"):
+        for kind in ("formula", "flow"):
             self.assertIn(kind, instruction["visualization"])
+        self.assertNotIn("plot", instruction["visualization"])
         self.assertIn("Do not read or repeat raw URLs", instruction["sources"])
 
     def test_failed_trusted_web_search_is_not_enriched(self) -> None:
@@ -117,6 +119,37 @@ class CourseToolInstructionTests(unittest.TestCase):
             )
 
         self.assertEqual(result, raw_result)
+
+    def test_voice_visualization_schema_uses_three_minimal_variants(self) -> None:
+        visual = next(
+            tool for tool in agent_spec.json_schemas()
+            if tool["name"] == "show_visualization"
+        )
+        variants = visual["parameters"]["oneOf"]
+        self.assertEqual(
+            {variant["properties"]["kind"]["const"] for variant in variants},
+            {"formula", "flow", "pdf"},
+        )
+
+        required_by_kind = {
+            variant["properties"]["kind"]["const"]: set(variant["required"])
+            for variant in variants
+        }
+        self.assertEqual(
+            required_by_kind["formula"],
+            {"kind", "title", "caption", "latex"},
+        )
+        self.assertEqual(
+            required_by_kind["flow"],
+            {"kind", "title", "caption", "labels"},
+        )
+        self.assertEqual(
+            required_by_kind["pdf"],
+            {"kind", "title", "caption", "file", "page"},
+        )
+        schema_text = json.dumps(visual, ensure_ascii=False)
+        for removed in ("plot", "points", "x_label", "y_label"):
+            self.assertNotIn(removed, schema_text)
 
     def test_voice_prompt_defers_search_behavior_to_tool_result_instructions(self) -> None:
         persona = agent_spec.persona("socratic")
