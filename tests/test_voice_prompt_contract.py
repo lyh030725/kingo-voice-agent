@@ -13,12 +13,16 @@ from brain import MODE_PROMPTS
 
 
 class VoicePromptContractTests(unittest.TestCase):
-    def test_always_on_voice_prompt_stays_compact(self) -> None:
-        self.assertLess(len(agent_spec.VOICE_SYSTEM_PROMPT), 1200)
-        self.assertIn("Follow the teaching, grounding, and visualization instructions", agent_spec.VOICE_SYSTEM_PROMPT)
-        self.assertIn("Use show_visualization when a visual materially helps learning", agent_spec.VOICE_SYSTEM_PROMPT)
-        self.assertNotIn("Greek letter", agent_spec.VOICE_SYSTEM_PROMPT)
-        self.assertNotIn("fraction", agent_spec.VOICE_SYSTEM_PROMPT)
+    def test_always_on_voice_prompt_stays_compact_but_strong_on_visuals(self) -> None:
+        prompt = agent_spec.VOICE_SYSTEM_PROMPT
+        self.assertLess(len(prompt), 1200)
+        self.assertIn("Follow instructions returned by search tools", prompt)
+        self.assertIn("Visualization is part of teaching, not decoration", prompt)
+        self.assertIn("MUST call show_visualization before responding", prompt)
+        self.assertIn("without\nrevealing the final answer", prompt)
+        self.assertNotIn("Greek letter", prompt)
+        self.assertNotIn("fraction", prompt)
+        self.assertNotIn("plot", prompt)
 
     def test_socratic_mode_keeps_strong_non_revealing_behavior(self) -> None:
         prompt = MODE_PROMPTS["socratic"]
@@ -29,11 +33,16 @@ class VoicePromptContractTests(unittest.TestCase):
         self.assertIn("End every response with exactly one question", prompt)
         self.assertIn("Maximum two short spoken sentences", prompt)
 
-    def test_course_result_still_reinforces_socratic_behavior(self) -> None:
-        teaching = agent_spec.COURSE_RESULT_INSTRUCTION["teaching"]
-        self.assertIn("Do not reveal, summarize, or paraphrase", teaching)
-        self.assertIn("Give no hint on the first attempt", teaching)
-        self.assertIn("one minimal hint", teaching)
+    def test_search_results_still_reinforce_socratic_behavior(self) -> None:
+        for instruction in (
+            agent_spec.COURSE_RESULT_INSTRUCTION,
+            agent_spec.WEB_RESULT_INSTRUCTION,
+        ):
+            teaching = instruction["teaching"]
+            self.assertIn("Do not reveal", teaching)
+            self.assertIn("one minimal hint", teaching)
+            self.assertIn("show_visualization", instruction["visualization"])
+            self.assertIn("next reasoning step", instruction["visualization"])
 
 
 if __name__ == "__main__":
