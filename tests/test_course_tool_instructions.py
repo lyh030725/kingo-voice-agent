@@ -69,14 +69,60 @@ class CourseToolInstructionTests(unittest.TestCase):
 
         self.assertEqual(result, raw_result)
 
-    def test_voice_prompt_defers_tool_result_behavior_to_course_instruction(self) -> None:
+    def test_successful_trusted_web_search_adds_socratic_and_visual_guidance(self) -> None:
+        raw_result = {
+            "found": True,
+            "answer": "trusted evidence summary",
+            "sources": ["https://arxiv.org/abs/1234.5678"],
+            "instruction": "The UI displays source URLs separately.",
+        }
+
+        with patch.object(
+            agent_spec,
+            "run_brain_tool",
+            new=AsyncMock(return_value=json.dumps(raw_result, ensure_ascii=False)),
+        ):
+            result = asyncio.run(
+                agent_spec.run_tool(
+                    "search_trusted_web",
+                    {"query": "attention scaling", "reason": "course evidence insufficient"},
+                )
+            )
+
+        instruction = result["instruction"]
+        self.assertIn("trusted-web evidence", instruction["grounding"])
+        self.assertIn("Do not reveal", instruction["teaching"])
+        self.assertIn("exactly one short reasoning question", instruction["teaching"])
+        self.assertIn("show_visualization", instruction["visualization"])
+        for kind in ("formula", "flow", "plot"):
+            self.assertIn(kind, instruction["visualization"])
+        self.assertIn("Do not read or repeat raw URLs", instruction["sources"])
+
+    def test_failed_trusted_web_search_is_not_enriched(self) -> None:
+        raw_result = {
+            "error": "trusted web search returned no citable sources",
+            "query": "unknown topic",
+        }
+
+        with patch.object(
+            agent_spec,
+            "run_brain_tool",
+            new=AsyncMock(return_value=json.dumps(raw_result, ensure_ascii=False)),
+        ):
+            result = asyncio.run(
+                agent_spec.run_tool(
+                    "search_trusted_web",
+                    {"query": "unknown topic", "reason": "course evidence insufficient"},
+                )
+            )
+
+        self.assertEqual(result, raw_result)
+
+    def test_voice_prompt_defers_search_behavior_to_tool_result_instructions(self) -> None:
         persona = agent_spec.persona("socratic")
-        self.assertIn(
-            "Follow the teaching, grounding, and visualization instructions returned by",
-            persona,
-        )
+        self.assertIn("Follow instructions returned by search tools", persona)
         self.assertIn("Only immediately before calling", persona)
-        self.assertIn("Do not say a\nfiller before show_visualization", persona)
+        self.assertIn("filler before show_visualization", persona)
 
 
 if __name__ == "__main__":
