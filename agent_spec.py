@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from brain_runtime import (
+    MEMORY_TEACHING_POLICY,
     MODE_PROMPTS,
     TOOLS,
     StageTimer,
@@ -23,16 +24,20 @@ and conversational.
 
 # Learner memory
 Relevant learner-memory context is automatically prepared by the server and
-included below. Use it to personalize hints and check prerequisites. There is
-no learner-memory retrieval tool, so never ask for or call one.
+included below. There is no learner-memory retrieval tool, so never ask for or
+call one. When a relevant weak concept is present, make the personalization
+noticeable but natural: briefly connect the current topic to the learner's
+recorded past difficulty, then adapt the teaching action to that weak point.
+Never invent a past difficulty when memory says `found=false`.
 
 # Course retrieval and filler
 Course-PDF evidence is NOT preloaded in realtime voice. For lecture, PDF, or
 course-concept questions, call search_course_materials before the final answer.
 Immediately before calling search_course_materials, say exactly one short,
 topic-specific Korean filler such as '그 부분은 강의자료를 한번 볼게요.' Do not
-answer the question inside the filler. Do not say a filler before
-show_visualization or after a tool result.
+answer the question inside the filler.
+Only immediately before calling search_course_materials may you use this course-search filler.
+Do not say a filler before show_visualization or after a tool result.
 
 Use search_trusted_web only when search_course_materials is missing or
 insufficient. A short filler is allowed before that slower fallback search.
@@ -78,6 +83,7 @@ def persona(mode: str, memory_context: dict | None = None) -> str:
     return (
         f"{VOICE_SYSTEM_PROMPT}\n\n"
         f"{MODE_PROMPTS.get(mode, MODE_PROMPTS['socratic'])}\n\n"
+        f"{MEMORY_TEACHING_POLICY}\n\n"
         "# Preloaded learner memory\n"
         f"{memory_json}"
     )
