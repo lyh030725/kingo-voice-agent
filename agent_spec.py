@@ -35,9 +35,9 @@ Course-PDF evidence is NOT preloaded in realtime voice. For lecture, PDF, or
 course-concept questions, call search_course_materials before the final answer.
 Immediately before calling search_course_materials, say exactly one short,
 topic-specific Korean filler such as '그 부분은 강의자료를 한번 볼게요.' Do not
-answer the question inside the filler. Only immediately before calling
-search_course_materials may you use this course-search filler. Do not say a
-filler before show_visualization or after a tool result.
+answer the question inside the filler.
+Only immediately before calling search_course_materials may you use this course-search filler.
+Do not say a filler before show_visualization or after a tool result.
 
 Use search_trusted_web only when search_course_materials is missing or
 insufficient. A short filler is allowed before that slower fallback search.
