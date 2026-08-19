@@ -25,13 +25,10 @@ course evidence is insufficient.
 
 # Visualization
 Visualization is part of teaching, not decoration.
-For course concepts involving a formula, process, structure, or PDF page,
-MUST use show_visualization before asking the Socratic question.
-When the current reasoning step is best understood through a formula, process,
-structure, or PDF page, MUST call show_visualization before responding.
-In Socratic mode, use the visual to support the next reasoning step without
-revealing the final answer. Keep raw formulas and visual data in the tool;
-speak only their meaning.
+Prefer show_visualization whenever a formula, process, structure, or PDF page
+would make the current reasoning step clearer.
+In Socratic mode, use the visual as a clue for the next reasoning step, not the
+final answer. Keep raw formulas and visual data in the tool; speak only their meaning.
 All user-visible visualization text, including title, caption, and flow labels,
 MUST be Korean. Keep only formulas and standard technical terms in their original form.
 
@@ -147,53 +144,30 @@ VOICE_VISUALIZATION_TOOL = {
 
 COURSE_RESULT_INSTRUCTION = {
     "grounding": (
-        "Use the returned course evidence as the source of truth for this turn. "
-        "When referring to course evidence, mention the returned filename and page."
+        "Teach from this course evidence and cite filename/page when relevant."
     ),
     "teaching": (
-        "In Socratic mode, treat the retrieved material as private teaching evidence, "
-        "not as content to immediately explain. Do not reveal, summarize, or paraphrase "
-        "the answer from the material before the learner attempts the reasoning step. "
-        "Ask exactly one short reasoning question that targets the smallest next step. "
-        "Give no hint on the first attempt. After a wrong answer or an explicit 'I don't "
-        "know', give only one minimal hint that does not contain the answer, then ask one "
-        "easier question. In explain mode, explain directly from the evidence."
+        "Keep the current teaching mode. In Socratic mode, guide with one next-step "
+        "question instead of giving the answer."
     ),
     "visualization": (
-        "If the current reasoning step is best understood visually, call "
-        "show_visualization before continuing. Use pdf for a useful returned source page, "
-        "formula for an equation or variable relationship, and flow for a process, "
-        "structure, or conceptual sequence. If you explicitly refer to a specific returned "
-        "PDF page, show that page with kind='pdf'. In Socratic mode, visualize a clue for "
-        "the next reasoning step rather than the final answer. Do not say a filler before "
-        "show_visualization."
+        "Prefer show_visualization when a formula, structure, process, or useful PDF page "
+        "could help the learner reason. Use it as a clue, not the final answer."
     ),
 }
 
 WEB_RESULT_INSTRUCTION = {
     "grounding": (
-        "Use only the returned trusted-web evidence for factual claims that were not "
-        "supported by course material. Do not add unsupported facts from memory."
+        "Use this trusted-web evidence only for claims not supported by course material."
     ),
     "teaching": (
-        "In Socratic mode, treat the web answer as private teaching evidence rather than "
-        "a learner-facing final answer. Do not reveal the conclusion before the learner "
-        "attempts the reasoning step. Ask exactly one short reasoning question that "
-        "targets the smallest next step. After a wrong answer or an explicit 'I don't "
-        "know', give only one minimal hint that does not contain the answer, then ask one "
-        "easier question. In explain mode, explain directly from the evidence."
+        "Keep the current teaching mode. In Socratic mode, guide with one next-step "
+        "question instead of giving the answer."
     ),
     "visualization": (
-        "If the current reasoning step is best understood visually, call "
-        "show_visualization before continuing. Use formula for equations or variable "
-        "relationships and flow for processes or structures. In Socratic mode, visualize "
-        "a clue for the next reasoning step rather than the final answer. Do not say a "
-        "filler before show_visualization."
+        "Prefer show_visualization when a formula, structure, or process could help reasoning."
     ),
-    "sources": (
-        "The UI displays trusted source URLs separately. Do not read or repeat raw URLs "
-        "in the spoken answer."
-    ),
+    "sources": "Do not read raw URLs aloud.",
 }
 
 _SOURCE_PAGE_RE = re.compile(r"^(?P<file>.+?)\s+p\.(?P<page>\d+)$")
