@@ -12,7 +12,7 @@ from typing import AsyncIterator
 import websockets
 
 import agent_spec
-from brain import EXTERNAL_BRAIN, MAX_HISTORY_MESSAGES
+from brain_runtime import MAX_HISTORY_MESSAGES, get_external_brain, prefetch_memory_context
 from transport import (
     AGENT_RATE,
     CALLER_RATE,
@@ -41,8 +41,16 @@ TOOL_TIMEOUT_S = 10
 class GrokTransport(Transport):
     name = "grok"
 
-    def __init__(self, mode: str = "socratic") -> None:
+    def __init__(
+        self,
+        mode: str = "socratic",
+        *,
+        student_id: str = "default-student",
+        session_id: str = "default-session",
+    ) -> None:
         self.mode = mode
+        self.student_id = student_id
+        self.session_id = session_id
         self._ws = None
         self._connected = asyncio.Event()
         self._ready = asyncio.Event()
@@ -56,6 +64,9 @@ class GrokTransport(Transport):
         self._discard_response_output = False
         self._conversation: list[dict[str, str]] = []
         self._assessment_scheduled = False
+        self._memory_context: dict = {"found": False}
+        self._memory_task: asyncio.Task | None = None
+        self._memory_query = ""
 
     async def start(self) -> None:
         key = os.environ.get("XAI_API_KEY", "").strip()
@@ -72,7 +83,7 @@ class GrokTransport(Transport):
         await self._send({
             "type": "session.update",
             "session": {
-                "instructions": agent_spec.persona(self.mode),
+                "instructions": agent_spec.persona(self.mode, self._memory_context),
                 "voice": VOICE,
                 "audio": {
                     "input": {
@@ -104,7 +115,9 @@ class GrokTransport(Transport):
 
     async def send_text(self, text: str) -> None:
         if self._ws is not None and not self._closed:
-            self._begin_user_turn(text.strip())
+            text = text.strip()
+            self._begin_user_turn(text)
+            await self._refresh_memory_context(text)
             await self._send({
                 "type": "conversation.item.create",
                 "item": {
@@ -207,9 +220,11 @@ class GrokTransport(Transport):
                     transcript = event.get("transcript") or event.get("text") or ""
                     if transcript and transcript != self._last_user_transcript:
                         self._last_user_transcript = transcript
+                        self._schedule_memory_prefetch(transcript)
                         yield Transcript("user", transcript)
                     if kind.endswith("input_audio_transcription.completed") and transcript:
-                        self._begin_user_turn(transcript)
+                        self._begin_user_turn(transcript, keep_memory_task=True)
+                        self._schedule_memory_prefetch(transcript)
                         if self._response_done:
                             self._schedule_assessment()
                 elif kind.endswith("output_audio_transcript.done"):
@@ -231,10 +246,12 @@ class GrokTransport(Transport):
         except websockets.ConnectionClosed as exc:
             yield Failed(f"model connection closed: {exc}")
         finally:
+            self._cancel_memory_task()
             self._closed = True
 
     async def close(self) -> None:
         self._closed = True
+        self._cancel_memory_task()
         if self._ws is not None:
             await self._ws.close()
             self._ws = None
@@ -243,14 +260,53 @@ class GrokTransport(Transport):
         assert self._ws is not None
         await self._ws.send(json.dumps(payload))
 
-    def _begin_user_turn(self, transcript: str) -> None:
+    def _begin_user_turn(self, transcript: str, *, keep_memory_task: bool = False) -> None:
         transcript = transcript.strip()
         if not transcript:
             return
         self._last_user_transcript = transcript
+        self._assessment_scheduled = False
+        if not keep_memory_task:
+            self._cancel_memory_task()
 
     def _reset_for_new_speech(self) -> None:
+        self._cancel_memory_task()
         self._last_user_transcript = ""
+        self._assessment_scheduled = False
+        self._memory_query = ""
+
+    def _cancel_memory_task(self) -> None:
+        if self._memory_task is not None and not self._memory_task.done():
+            self._memory_task.cancel()
+        self._memory_task = None
+
+    def _schedule_memory_prefetch(self, transcript: str) -> None:
+        transcript = transcript.strip()
+        if not transcript or transcript == self._memory_query:
+            return
+        self._memory_query = transcript
+        self._cancel_memory_task()
+        self._memory_task = asyncio.create_task(self._refresh_memory_context(transcript))
+
+    async def _refresh_memory_context(self, transcript: str) -> None:
+        try:
+            context = await prefetch_memory_context(transcript, self.student_id)
+            self._memory_context = context.get("weak_concepts", context)
+            if self._ws is not None and not self._closed:
+                await self._send({
+                    "type": "session.update",
+                    "session": {
+                        "instructions": agent_spec.persona(self.mode, self._memory_context),
+                    },
+                })
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("realtime learner-memory prefetch failed")
+        finally:
+            current = asyncio.current_task()
+            if self._memory_task is current:
+                self._memory_task = None
 
     def _schedule_assessment(self) -> None:
         if self._assessment_scheduled:
@@ -270,7 +326,7 @@ class GrokTransport(Transport):
         ])
         if len(self._conversation) > MAX_HISTORY_MESSAGES:
             del self._conversation[:-MAX_HISTORY_MESSAGES]
-        EXTERNAL_BRAIN.schedule(self._conversation, source="realtime")
+        get_external_brain(self.student_id).schedule(self._conversation, source="realtime")
         self._assessment_scheduled = True
         self._last_user_transcript = ""
 
