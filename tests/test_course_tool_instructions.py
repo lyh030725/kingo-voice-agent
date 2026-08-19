@@ -15,7 +15,7 @@ import agent_spec
 
 
 class CourseToolInstructionTests(unittest.TestCase):
-    def test_successful_course_search_adds_socratic_and_visual_guidance(self) -> None:
+    def test_successful_course_search_adds_concise_teaching_and_visual_reminders(self) -> None:
         raw_result = {
             "found": True,
             "query": "scaled dot product attention",
@@ -44,12 +44,13 @@ class CourseToolInstructionTests(unittest.TestCase):
 
         self.assertEqual(result["results"][0]["file"], "lecture06_Transformer_Part1.pdf")
         self.assertEqual(result["results"][0]["page"], 8)
-        self.assertIn("Do not reveal", result["instruction"]["teaching"])
-        self.assertIn("exactly one short reasoning question", result["instruction"]["teaching"])
-        self.assertIn("show_visualization", result["instruction"]["visualization"])
-        for kind in ("pdf", "formula", "flow"):
-            self.assertIn(kind, result["instruction"]["visualization"])
-        self.assertNotIn("plot", result["instruction"]["visualization"])
+        instruction = result["instruction"]
+        self.assertIn("course evidence", instruction["grounding"])
+        self.assertIn("current teaching mode", instruction["teaching"])
+        self.assertIn("one next-step question", instruction["teaching"])
+        self.assertIn("Prefer show_visualization", instruction["visualization"])
+        self.assertIn("clue, not the final answer", instruction["visualization"])
+        self.assertLess(len(json.dumps(instruction, ensure_ascii=False)), 650)
 
     def test_missing_course_evidence_keeps_web_fallback_instruction(self) -> None:
         raw_result = {
@@ -70,7 +71,7 @@ class CourseToolInstructionTests(unittest.TestCase):
 
         self.assertEqual(result, raw_result)
 
-    def test_successful_trusted_web_search_adds_socratic_and_visual_guidance(self) -> None:
+    def test_successful_trusted_web_search_adds_concise_teaching_and_visual_reminders(self) -> None:
         raw_result = {
             "found": True,
             "answer": "trusted evidence summary",
@@ -92,13 +93,11 @@ class CourseToolInstructionTests(unittest.TestCase):
 
         instruction = result["instruction"]
         self.assertIn("trusted-web evidence", instruction["grounding"])
-        self.assertIn("Do not reveal", instruction["teaching"])
-        self.assertIn("exactly one short reasoning question", instruction["teaching"])
-        self.assertIn("show_visualization", instruction["visualization"])
-        for kind in ("formula", "flow"):
-            self.assertIn(kind, instruction["visualization"])
-        self.assertNotIn("plot", instruction["visualization"])
-        self.assertIn("Do not read or repeat raw URLs", instruction["sources"])
+        self.assertIn("current teaching mode", instruction["teaching"])
+        self.assertIn("one next-step question", instruction["teaching"])
+        self.assertIn("Prefer show_visualization", instruction["visualization"])
+        self.assertEqual(instruction["sources"], "Do not read raw URLs aloud.")
+        self.assertLess(len(json.dumps(instruction, ensure_ascii=False)), 650)
 
     def test_failed_trusted_web_search_is_not_enriched(self) -> None:
         raw_result = {
