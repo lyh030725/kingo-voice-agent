@@ -1,9 +1,4 @@
-"""KINGO VOICE TA brain shared by text and realtime transports.
-
-Every turn prefetches learner memory and local course-PDF evidence on the
-server. Grok only receives optional tools for trusted-web fallback and visual
-rendering, so mandatory retrieval never depends on model tool selection.
-"""
+"""KINGO brain shared by text and realtime transports."""
 
 from __future__ import annotations
 
@@ -26,14 +21,20 @@ from pypdf import PdfReader
 
 from external_brain import ExternalBrain
 from moss_memory import MossMemoryStore
+from pdf_retrieval import clear_embedding_cache, hybrid_rank
+from session_state import (
+    clear_history,
+    close_all,
+    external_brain_for,
+    history_for,
+    memory_for,
+)
 
 if os.environ.get("VOICE_AI_SKIP_DOTENV") != "1":
     load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("dispatcher")
-
-MOSS_MEMORY = MossMemoryStore()
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_SEARCH_LOG = BASE_DIR / "sources" / "web-search.jsonl"
@@ -51,185 +52,16 @@ MAX_MATERIAL_BYTES = 25 * 1024 * 1024
 PDF_MAX_RESULTS = 3
 PDF_PAGE_CACHE: list[dict] | None = None
 MAX_HISTORY_MESSAGES = 12
+MAX_TOOL_ROUNDS = 6
+MEMORY_TOP_K = max(1, int(os.environ.get("MEMORY_TOP_K", "3")))
 
-
-def list_course_materials() -> list[dict]:
-    """List indexed PDF files.
-
-    Returns:
-        Material records containing filename and byte size.
-    """
-    COURSE_SRCS_DIR.mkdir(parents=True, exist_ok=True)
-    return [
-        {"name": path.name, "size": path.stat().st_size}
-        for path in sorted(COURSE_SRCS_DIR.glob("*.pdf"))
-    ]
-
-
-def get_course_material_path(filename: str) -> Path:
-    """Resolve one uploaded PDF without allowing directory traversal.
-
-    Args:
-        filename: Plain PDF filename without directory components.
-
-    Returns:
-        Existing path inside the course materials directory.
-    """
-    if not filename or filename != Path(filename).name or any(
-        char in filename for char in ("\\", "\0")
-    ):
-        raise ValueError("invalid filename")
-    if Path(filename).suffix.casefold() != ".pdf":
-        raise ValueError("only PDF course materials are supported")
-    path = COURSE_SRCS_DIR / filename
-    if not path.is_file():
-        raise FileNotFoundError(filename)
-    return path
-
-
-def add_course_material(filename: str, content: bytes) -> dict:
-    """Save one professor-uploaded course PDF and invalidate search cache.
-
-    Args:
-        filename: Plain PDF filename without directory components.
-        content: Complete PDF file bytes.
-
-    Returns:
-        Saved material record containing filename and byte size.
-    """
-    global PDF_PAGE_CACHE
-    if not filename or filename != Path(filename).name or any(
-        char in filename for char in ("\\", "\0")
-    ):
-        raise ValueError("invalid filename")
-    if Path(filename).suffix.casefold() != ".pdf":
-        raise ValueError("only PDF course materials are supported")
-    if not content.startswith(b"%PDF-"):
-        raise ValueError("file is not a valid PDF")
-    if len(content) > MAX_MATERIAL_BYTES:
-        raise ValueError("course material exceeds 25 MB")
-    COURSE_SRCS_DIR.mkdir(parents=True, exist_ok=True)
-    path = COURSE_SRCS_DIR / filename
-    path.write_bytes(content)
-    PDF_PAGE_CACHE = None
-    return {"name": path.name, "size": len(content)}
-
-
-def remove_course_material(filename: str) -> None:
-    """Delete one uploaded PDF and invalidate the search cache."""
-    global PDF_PAGE_CACHE
-    path = get_course_material_path(filename)
-    path.unlink()
-    PDF_PAGE_CACHE = None
-
-
-def _trusted_domain(value: str) -> str:
-    """Normalize a URL or hostname to a trusted domain.
-
-    Args:
-        value: HTTPS URL or bare hostname supplied by professor.
-
-    Returns:
-        Lowercase hostname accepted by xAI web-search filters.
-    """
-    raw = value.strip()
-    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-    domain = (parsed.hostname or "").lower().rstrip(".")
-    if parsed.scheme not in {"http", "https"} or "." not in domain:
-        raise ValueError("valid HTTP(S) site is required")
-    return domain
-
-
-def _trusted_domains(values: list[str] | tuple[str, ...]) -> list[str]:
-    domains = sorted({_trusted_domain(value) for value in values})
-    if len(domains) > MAX_TRUSTED_WEB_DOMAINS:
-        raise ValueError(f"at most {MAX_TRUSTED_WEB_DOMAINS} trusted sites are allowed")
-    return domains
-
-
-def get_trusted_domains() -> list[str]:
-    """Load current professor-managed trusted domains.
-
-    Returns:
-        Sorted unique domain allowlist.
-    """
-    if not TRUSTED_SITES_FILE.exists():
-        return _trusted_domains(DEFAULT_TRUSTED_WEB_DOMAINS)
-    try:
-        values = json.loads(TRUSTED_SITES_FILE.read_text(encoding="utf-8"))
-        return _trusted_domains(values)
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        log.exception("failed to load trusted sites; using defaults")
-        return _trusted_domains(DEFAULT_TRUSTED_WEB_DOMAINS)
-
-
-def _save_trusted_domains(domains: list[str]) -> None:
-    """Persist trusted domains.
-
-    Args:
-        domains: Normalized domain allowlist.
-
-    Returns:
-        None.
-    """
-    TRUSTED_SITES_FILE.write_text(
-        json.dumps(_trusted_domains(domains), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-
-def add_trusted_domain(value: str) -> list[str]:
-    """Add one professor-approved trusted domain.
-
-    Args:
-        value: HTTPS URL or bare hostname.
-
-    Returns:
-        Updated sorted domain allowlist.
-    """
-    domains = set(get_trusted_domains())
-    domain = _trusted_domain(value)
-    if domain not in domains and len(domains) >= MAX_TRUSTED_WEB_DOMAINS:
-        raise ValueError(f"at most {MAX_TRUSTED_WEB_DOMAINS} trusted sites are allowed")
-    domains.add(domain)
-    result = sorted(domains)
-    _save_trusted_domains(result)
-    return result
-
-
-def remove_trusted_domain(value: str) -> list[str]:
-    """Remove one trusted domain.
-
-    Args:
-        value: HTTPS URL or bare hostname.
-
-    Returns:
-        Updated sorted domain allowlist.
-    """
-    domain = _trusted_domain(value)
-    result = [item for item in get_trusted_domains() if item != domain]
-    _save_trusted_domains(result)
-    return result
-
-
-def require_env(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise RuntimeError(
-            f"{name} is not set. Copy .env.example to .env and fill it in; "
-            f"model names and voices live at https://docs.x.ai."
-        )
-    return value
-
-
-def xai_client() -> OpenAI:
-    return OpenAI(
-        base_url=os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1"),
-        api_key=require_env("XAI_API_KEY"),
-    )
-
-
-EXTERNAL_BRAIN = ExternalBrain(MOSS_MEMORY, xai_client)
+MEMORY_GUIDANCE = """
+# Learner memory
+The supplied memories are this student's past weak concepts. Use them only when relevant.
+If relevant, naturally mention the prior difficulty once and adapt the next question or explanation.
+If recall_type is `recent`, answer the learner's past-learning question from the supplied records.
+Never invent learner history or force an unrelated memory into the conversation.
+""".strip()
 
 
 class StageTimer:
@@ -238,13 +70,11 @@ class StageTimer:
 
     @contextmanager
     def stage(self, name: str):
-        t0 = time.perf_counter()
+        started = time.perf_counter()
         try:
             yield
         finally:
-            ms = round((time.perf_counter() - t0) * 1000)
-            self.timings_ms[name] = ms
-            log.info("stage %-5s %5d ms", name, ms)
+            self.record(name, started)
 
     def record(self, name: str, started_at: float) -> None:
         ms = round((time.perf_counter() - started_at) * 1000)
@@ -274,9 +104,6 @@ class Visualization(BaseModel):
     file: str = Field(default="", max_length=255)
     page: int = Field(default=0, ge=0)
 
-
-HISTORY: list[dict] = []
-# One in-process student session; split by authenticated user when auth lands.
 
 SYSTEM_PROMPT = """
 # Role
@@ -359,7 +186,6 @@ Your goal is to make the student perform the next reasoning step.
 """,
 }
 
-MAX_TOOL_ROUNDS = 6
 TOOLS = [
     {
         "type": "function",
@@ -373,10 +199,7 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Focused external search query.",
-                    },
+                    "query": {"type": "string", "description": "Focused external search query."},
                     "reason": {
                         "type": "string",
                         "description": "Specific gap in the preloaded course-PDF evidence.",
@@ -393,10 +216,8 @@ TOOLS = [
             "name": "show_visualization",
             "description": (
                 "Show a safe visual reference instead of putting formulas, diagrams, "
-                "or graph coordinates in the spoken answer. Prefer calling this even "
-                "for one equation or variable relationship, and whenever visual support "
-                "might help. Use formula for LaTeX, flow for ordered labeled steps, "
-                "plot for numeric x/y points, or pdf to show a referenced course PDF page."
+                "or graph coordinates in the spoken answer. Use formula for LaTeX, flow "
+                "for ordered labels, plot for numeric points, or pdf for a course page."
             ),
             "strict": True,
             "parameters": {
@@ -405,57 +226,25 @@ TOOLS = [
                     "title": {"type": "string", "description": "Short Korean title."},
                     "kind": {"type": "string", "enum": ["formula", "flow", "plot", "pdf"]},
                     "caption": {"type": "string", "description": "One concise Korean takeaway."},
-                    "latex": {
-                        "type": "string",
-                        "description": "Raw LaTeX without dollar delimiters; empty unless kind is formula.",
-                    },
-                    "labels": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Ordered node labels; empty unless kind is flow.",
-                    },
+                    "latex": {"type": "string", "description": "Raw LaTeX; empty unless formula."},
+                    "labels": {"type": "array", "items": {"type": "string"}},
                     "points": {
                         "type": "array",
-                        "description": "Numeric points; empty unless kind is plot.",
                         "items": {
                             "type": "object",
-                            "properties": {
-                                "x": {"type": "number"},
-                                "y": {"type": "number"},
-                            },
+                            "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
                             "required": ["x", "y"],
                             "additionalProperties": False,
                         },
                     },
-                    "x_label": {
-                        "type": "string",
-                        "description": "Plot x-axis label, otherwise empty.",
-                    },
-                    "y_label": {
-                        "type": "string",
-                        "description": "Plot y-axis label, otherwise empty.",
-                    },
-                    "file": {
-                        "type": "string",
-                        "description": "Exact course PDF filename; empty unless kind is pdf.",
-                    },
-                    "page": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "description": "1-based PDF page; zero unless kind is pdf.",
-                    },
+                    "x_label": {"type": "string"},
+                    "y_label": {"type": "string"},
+                    "file": {"type": "string"},
+                    "page": {"type": "integer", "minimum": 0},
                 },
                 "required": [
-                    "title",
-                    "kind",
-                    "caption",
-                    "latex",
-                    "labels",
-                    "points",
-                    "x_label",
-                    "y_label",
-                    "file",
-                    "page",
+                    "title", "kind", "caption", "latex", "labels", "points",
+                    "x_label", "y_label", "file", "page",
                 ],
                 "additionalProperties": False,
             },
@@ -464,12 +253,149 @@ TOOLS = [
 ]
 
 
+def require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"{name} is not set. Copy .env.example to .env and fill it in; "
+            f"model names and voices live at https://docs.x.ai."
+        )
+    return value
+
+
+def xai_client() -> OpenAI:
+    return OpenAI(
+        base_url=os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1"),
+        api_key=require_env("XAI_API_KEY"),
+    )
+
+
+# Compatibility aliases for legacy single-student tests/callers. Runtime code below
+# still isolates non-default students and sessions through session_state.
+MOSS_MEMORY = memory_for("default-student")
+HISTORY = history_for("default-student", "default-session")
+EXTERNAL_BRAIN = external_brain_for("default-student", xai_client)
+
+
+def _memory_store(student_id: str) -> MossMemoryStore:
+    return MOSS_MEMORY if student_id == "default-student" else memory_for(student_id)
+
+
+def get_external_brain(student_id: str):
+    return EXTERNAL_BRAIN if student_id == "default-student" else external_brain_for(student_id, xai_client)
+
+
+def _conversation_history(student_id: str, session_id: str) -> list[dict]:
+    if student_id == "default-student" and session_id == "default-session":
+        return HISTORY
+    return history_for(student_id, session_id)
+
+
+def list_course_materials() -> list[dict]:
+    COURSE_SRCS_DIR.mkdir(parents=True, exist_ok=True)
+    return [
+        {"name": path.name, "size": path.stat().st_size}
+        for path in sorted(COURSE_SRCS_DIR.glob("*.pdf"))
+    ]
+
+
+def get_course_material_path(filename: str) -> Path:
+    if not filename or filename != Path(filename).name or any(
+        char in filename for char in ("\\", "\0")
+    ):
+        raise ValueError("invalid filename")
+    if Path(filename).suffix.casefold() != ".pdf":
+        raise ValueError("only PDF course materials are supported")
+    path = COURSE_SRCS_DIR / filename
+    if not path.is_file():
+        raise FileNotFoundError(filename)
+    return path
+
+
+def add_course_material(filename: str, content: bytes) -> dict:
+    global PDF_PAGE_CACHE
+    if not filename or filename != Path(filename).name or any(
+        char in filename for char in ("\\", "\0")
+    ):
+        raise ValueError("invalid filename")
+    if Path(filename).suffix.casefold() != ".pdf":
+        raise ValueError("only PDF course materials are supported")
+    if not content.startswith(b"%PDF-"):
+        raise ValueError("file is not a valid PDF")
+    if len(content) > MAX_MATERIAL_BYTES:
+        raise ValueError("course material exceeds 25 MB")
+    COURSE_SRCS_DIR.mkdir(parents=True, exist_ok=True)
+    path = COURSE_SRCS_DIR / filename
+    path.write_bytes(content)
+    PDF_PAGE_CACHE = None
+    clear_embedding_cache()
+    return {"name": path.name, "size": len(content)}
+
+
+def remove_course_material(filename: str) -> None:
+    global PDF_PAGE_CACHE
+    get_course_material_path(filename).unlink()
+    PDF_PAGE_CACHE = None
+    clear_embedding_cache()
+
+
+def _trusted_domain(value: str) -> str:
+    raw = value.strip()
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    domain = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme not in {"http", "https"} or "." not in domain:
+        raise ValueError("valid HTTP(S) site is required")
+    return domain
+
+
+def _trusted_domains(values: list[str] | tuple[str, ...]) -> list[str]:
+    domains = sorted({_trusted_domain(value) for value in values})
+    if len(domains) > MAX_TRUSTED_WEB_DOMAINS:
+        raise ValueError(f"at most {MAX_TRUSTED_WEB_DOMAINS} trusted sites are allowed")
+    return domains
+
+
+def get_trusted_domains() -> list[str]:
+    if not TRUSTED_SITES_FILE.exists():
+        return _trusted_domains(DEFAULT_TRUSTED_WEB_DOMAINS)
+    try:
+        values = json.loads(TRUSTED_SITES_FILE.read_text(encoding="utf-8"))
+        return _trusted_domains(values)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        log.exception("failed to load trusted sites; using defaults")
+        return _trusted_domains(DEFAULT_TRUSTED_WEB_DOMAINS)
+
+
+def _save_trusted_domains(domains: list[str]) -> None:
+    TRUSTED_SITES_FILE.write_text(
+        json.dumps(_trusted_domains(domains), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def add_trusted_domain(value: str) -> list[str]:
+    domains = set(get_trusted_domains())
+    domain = _trusted_domain(value)
+    if domain not in domains and len(domains) >= MAX_TRUSTED_WEB_DOMAINS:
+        raise ValueError(f"at most {MAX_TRUSTED_WEB_DOMAINS} trusted sites are allowed")
+    domains.add(domain)
+    result = sorted(domains)
+    _save_trusted_domains(result)
+    return result
+
+
+def remove_trusted_domain(value: str) -> list[str]:
+    domain = _trusted_domain(value)
+    result = [item for item in get_trusted_domains() if item != domain]
+    _save_trusted_domains(result)
+    return result
+
+
 def _json(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
 def _tool_log_value(value: object, limit: int = 600) -> str:
-    """Return compact, bounded JSON for tool debugging logs."""
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -480,13 +406,13 @@ def _tool_log_value(value: object, limit: int = 600) -> str:
 
 
 def show_visualization(**args) -> str:
-    """Validate one formula, flow, plot, or course PDF page for the chat UI.
+    """Validate a visual reference.
 
     Args:
         **args: Structured visualization fields from the model tool call.
 
     Returns:
-        JSON string containing only validated, render-safe data.
+        JSON containing validated render-safe visual data.
     """
     visualization = Visualization(**args)
     if visualization.kind == "formula" and not visualization.latex.strip():
@@ -516,23 +442,105 @@ def _terms(text: str) -> set[str]:
     }
 
 
-async def recall_weak_concepts(topic: str) -> str:
-    """Recall weak concepts relevant to a topic for server-side prefetch.
+def _is_recent_memory_query(topic: str) -> bool:
+    normalized = " ".join(topic.casefold().split())
+    markers = (
+        "저번에 공부", "지난번에 공부", "전에 공부", "최근에 공부", "뭐 공부했",
+        "뭘 공부했", "무엇을 공부", "어떤 걸 공부", "어떤 거 공부", "마지막으로 공부",
+        "저번에 뭐", "지난번에 뭐", "최근에 뭐", "전에 뭐 어려", "저번에 어려",
+        "지난번에 어려", "최근에 어려", "내 취약 개념", "내가 취약", "내가 어려워",
+        "기억하고 있는 취약", "last time", "recently studied", "previously studied",
+        "what did i study", "what was i weak at",
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def _compact_memory(memory: dict) -> dict:
+    record = {
+        "concept": memory.get("concept", ""),
+        "difficulty": memory.get("difficulty_note") or memory.get("difficulty", ""),
+        "status": memory.get("status", "new"),
+    }
+    course = memory.get("course", "")
+    if course:
+        record["course"] = course
+    return record
+
+
+def _compact_memory_response(topic: str, memories: list[dict], recall_type: str) -> dict:
+    compact = [_compact_memory(memory) for memory in memories[:MEMORY_TOP_K]]
+    compact = [memory for memory in compact if memory["concept"]]
+    return {
+        "found": bool(compact),
+        "recall_type": recall_type,
+        "memories": compact,
+    }
+
+
+async def recent_weak_concepts(
+    student_id: str = "default-student",
+    *,
+    top_k: int = MEMORY_TOP_K,
+    topic: str = "recent learner memory",
+    recall_type: str = "recent",
+) -> dict:
+    memories = await _memory_store(student_id).all_memories()
+    memories.sort(
+        key=lambda item: (
+            float(item.get("last_seen_at", 0) or 0),
+            float(item.get("saved_at", 0) or 0),
+        ),
+        reverse=True,
+    )
+    compact = [_compact_memory(memory) for memory in memories[:top_k]]
+    compact = [memory for memory in compact if memory["concept"]]
+    return {"found": bool(compact), "recall_type": recall_type, "memories": compact}
+
+
+async def bootstrap_memory_context(student_id: str = "default-student") -> dict:
+    """Return three compact recent weak concepts for realtime startup."""
+    return await recent_weak_concepts(
+        student_id,
+        top_k=MEMORY_TOP_K,
+        topic="realtime session bootstrap",
+        recall_type="bootstrap",
+    )
+
+
+async def recall_weak_concepts(
+    topic: str,
+    student_id: str = "default-student",
+) -> str:
+    """Recall compact weak concepts relevant to a student turn.
 
     Args:
         topic: Current student question or concept.
+        student_id: Learner identity used to isolate memory.
 
     Returns:
-        JSON string containing matched memories.
+        JSON with at most three compact weak-concept records.
     """
-    return _json(await MOSS_MEMORY.recall(topic))
+    topic = topic.strip()
+    if not topic:
+        return _json({"found": False, "recall_type": "semantic", "memories": []})
+    if _is_recent_memory_query(topic):
+        return _json(
+            await recent_weak_concepts(
+                student_id,
+                top_k=MEMORY_TOP_K,
+                topic=topic,
+                recall_type="recent",
+            )
+        )
+    result = await _memory_store(student_id).recall(topic, top_k=MEMORY_TOP_K)
+    memories = result.get("memories", []) if isinstance(result, dict) else []
+    return _json(_compact_memory_response(topic, memories, "semantic"))
 
 
 def _pdf_pages() -> list[dict]:
     global PDF_PAGE_CACHE
     if PDF_PAGE_CACHE is not None:
         return PDF_PAGE_CACHE
-
     pages = []
     for pdf_path in sorted(COURSE_SRCS_DIR.glob("*.pdf")):
         try:
@@ -540,13 +548,11 @@ def _pdf_pages() -> list[dict]:
             for page_number, page in enumerate(reader.pages, start=1):
                 text = (page.extract_text() or "").strip()
                 if text:
-                    pages.append(
-                        {
-                            "file": pdf_path.name,
-                            "page": page_number,
-                            "text": re.sub(r"\s+", " ", text),
-                        }
-                    )
+                    pages.append({
+                        "file": pdf_path.name,
+                        "page": page_number,
+                        "text": re.sub(r"\s+", " ", text),
+                    })
         except Exception:
             log.exception("failed to index PDF: %s", pdf_path)
     PDF_PAGE_CACHE = pages
@@ -563,82 +569,92 @@ def _excerpt(text: str, terms: set[str], limit: int = 1000) -> str:
 
 
 def search_course_materials(query: str) -> str:
-    """Search indexed course PDFs by page for server-side prefetch.
+    """Hybrid-search indexed course PDFs.
 
     Args:
-        query: Focused terms from student question.
+        query: Focused terms from the student question.
 
     Returns:
-        JSON string with ranked filename, page, and excerpt results.
+        JSON with ranked filename, page, excerpt, and retrieval mode.
     """
     query = query.strip()
-    terms = _terms(query)
-    if not terms:
+    if not query:
         return _json({"error": "a focused PDF search query is required"})
-
-    ranked = []
-    for page in _pdf_pages():
+    terms = _terms(query)
+    pages = _pdf_pages()
+    lexical_scores = []
+    for page in pages:
         lowered = page["text"].casefold()
-        score = sum(lowered.count(term) for term in terms)
-        if score:
-            ranked.append((score, page))
-    ranked.sort(key=lambda item: item[0], reverse=True)
-
+        lexical_scores.append(float(sum(lowered.count(term) for term in terms)))
+    ranked, retrieval_mode = hybrid_rank(query, pages, lexical_scores, xai_client)
     results = [
         {
             "source": f"{page['file']} p.{page['page']}",
             "excerpt": _excerpt(page["text"], terms),
+            "score": round(float(score), 4),
         }
-        for _, page in ranked[:PDF_MAX_RESULTS]
+        for score, page in ranked[:PDF_MAX_RESULTS]
     ]
-    return _json(
-        {
-            "found": bool(results),
-            "query": query,
-            "results": results,
-            "instruction": (
-                "Use filename and page in the answer."
-                if results
-                else "No PDF evidence found; trusted web search is now allowed."
-            ),
-        }
-    )
+    return _json({
+        "found": bool(results),
+        "query": query,
+        "retrieval_mode": retrieval_mode,
+        "results": results,
+        "instruction": (
+            "Use filename and page in the answer."
+            if results
+            else "No PDF evidence found; trusted web search is now allowed."
+        ),
+    })
 
 
-async def prefetch_context(question: str, timer: StageTimer | None = None) -> dict:
-    """Fetch learner memory and course-PDF evidence in parallel before Grok runs.
+async def prefetch_memory_context(question: str, student_id: str) -> dict:
+    """Prepare only compact learner memory for realtime voice."""
+    topic = question.strip()
+    try:
+        raw = await recall_weak_concepts(topic, student_id)
+        memory = json.loads(raw)
+    except Exception as exc:
+        memory = {"error": f"memory prefetch failed: {exc}"}
+    return {"student_question": topic, "weak_concepts": memory}
+
+
+async def prefetch_context(
+    question: str,
+    timer: StageTimer | None = None,
+    student_id: str = "default-student",
+) -> dict:
+    """Prefetch learner memory and course-PDF evidence in parallel.
 
     Args:
         question: Current student utterance or typed question.
-        timer: Optional latency collector used by the text path.
+        timer: Optional latency collector.
+        student_id: Learner identity used to isolate memory.
 
     Returns:
-        JSON-compatible context with the student question, learner memory, and
-        course-material search results.
+        JSON-compatible learner-memory and course-material context.
     """
     topic = question.strip()
 
     async def recall() -> object:
-        started_at = time.perf_counter()
+        started = time.perf_counter()
         try:
-            return await recall_weak_concepts(topic)
+            if student_id == "default-student":
+                return await recall_weak_concepts(topic)
+            return await recall_weak_concepts(topic, student_id)
         finally:
             if timer is not None:
-                timer.record("recall", started_at)
+                timer.record("recall", started)
 
     async def search_pdf() -> object:
-        started_at = time.perf_counter()
+        started = time.perf_counter()
         try:
             return await asyncio.to_thread(search_course_materials, topic)
         finally:
             if timer is not None:
-                timer.record("pdf", started_at)
+                timer.record("pdf", started)
 
-    memory_raw, pdf_raw = await asyncio.gather(
-        recall(),
-        search_pdf(),
-        return_exceptions=True,
-    )
+    memory_raw, pdf_raw = await asyncio.gather(recall(), search_pdf(), return_exceptions=True)
 
     def decode(value: object, source: str) -> object:
         if isinstance(value, Exception):
@@ -656,24 +672,23 @@ async def prefetch_context(question: str, timer: StageTimer | None = None) -> di
 
 
 def answer_instructions(mode: str, context: dict) -> str:
-    """Build final-answer instructions shared by text and realtime voice.
+    """Build text-answer instructions with compact learner memory.
 
     Args:
         mode: Learner-selected explanation or Socratic mode.
-        context: Server-prefetched learner memory and course-PDF evidence.
+        context: Server-prefetched memory and course-PDF evidence.
 
     Returns:
-        System instructions containing the shared policy and preloaded context.
+        System instructions containing shared policy and preloaded context.
     """
     prefetched = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
     return (
         f"{SYSTEM_PROMPT}\n\n"
         f"{MODE_PROMPTS.get(mode, MODE_PROMPTS['socratic'])}\n\n"
+        f"{MEMORY_GUIDANCE}\n\n"
         "# Preloaded context\n"
-        "The server already prepared learner-memory context and course-PDF evidence "
-        "for this student turn. Treat the following JSON as authoritative context. "
-        "Use search_trusted_web only when course_materials is missing, reports an "
-        "error, or is insufficient for the requested factual claim.\n"
+        "Use search_trusted_web only when course_materials is missing, reports an error, "
+        "or is insufficient for the requested factual claim.\n"
         f"{prefetched}"
     )
 
@@ -682,7 +697,6 @@ def _trusted_urls(response) -> list[str]:
     payload = response.model_dump() if hasattr(response, "model_dump") else {}
     candidates = set(re.findall(r"https?://[^\s\]\)\"']+", json.dumps(payload)))
     candidates.update(re.findall(r"https?://[^\s\]\)\"']+", response.output_text or ""))
-
     trusted = []
     for url in sorted(candidates):
         host = urlparse(url.rstrip(".,;")).hostname or ""
@@ -696,15 +710,15 @@ def search_trusted_web(
     pdf_evidence_insufficient: bool = False,
     reason: str = "",
 ) -> str:
-    """Search trusted web domains and retain citation audit data.
+    """Search professor-approved web domains.
 
     Args:
         query: Focused external search query.
-        pdf_evidence_insufficient: Whether course PDF evidence is insufficient.
+        pdf_evidence_insufficient: Whether course evidence was insufficient.
         reason: Evidence gap permitting web fallback.
 
     Returns:
-        JSON string with cited answer and trusted source URLs.
+        JSON with answer and trusted source URLs.
     """
     query = query.strip()
     reason = reason.strip()
@@ -712,7 +726,6 @@ def search_trusted_web(
         return _json({"error": "web search query is required"})
     if not reason:
         return _json({"error": "PDF fallback reason is required"})
-
     response = xai_client().responses.create(
         model=os.environ.get("WEB_SEARCH_MODEL", "grok-4.3"),
         input=[
@@ -726,23 +739,15 @@ def search_trusted_web(
             },
             {"role": "user", "content": query},
         ],
-        tools=[
-            {
-                "type": "web_search",
-                "filters": {"allowed_domains": list(get_trusted_domains())},
-            }
-        ],
+        tools=[{
+            "type": "web_search",
+            "filters": {"allowed_domains": list(get_trusted_domains())},
+        }],
     )
     answer = (response.output_text or "").strip()
     sources = _trusted_urls(response)
     if not answer or not sources:
-        return _json(
-            {
-                "error": "trusted web search returned no citable sources",
-                "query": query,
-            }
-        )
-
+        return _json({"error": "trusted web search returned no citable sources", "query": query})
     record = {
         "query": query,
         "answer": answer,
@@ -754,41 +759,34 @@ def search_trusted_web(
     WEB_SEARCH_LOG.parent.mkdir(parents=True, exist_ok=True)
     with WEB_SEARCH_LOG.open("a", encoding="utf-8") as file:
         file.write(_json(record) + "\n")
-    return _json(
-        {
-            "found": True,
-            "answer": answer,
-            "sources": sources,
-            "instruction": (
-                "The UI displays source URLs separately; do not repeat them in the answer."
-            ),
-        }
-    )
+    return _json({
+        "found": True,
+        "answer": answer,
+        "sources": sources,
+        "instruction": "The UI displays source URLs separately; do not repeat them in the answer.",
+    })
 
 
 async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
-    """Dispatch one optional model-selected tool call.
+    """Dispatch one model-selected conversational tool.
 
     Args:
         name: Tool name emitted by Grok.
-        args: Parsed JSON arguments matching the tool schema.
-        timer: Collector receiving tool latency.
+        args: Parsed JSON arguments.
+        timer: Latency collector.
 
     Returns:
-        JSON string containing tool output or a recoverable error.
+        JSON tool output or a recoverable error.
     """
     started_at = time.perf_counter()
     stage = {
-        "recall_weak_concepts": "recall",
         "search_course_materials": "pdf",
         "search_trusted_web": "web",
         "show_visualization": "visual",
     }.get(name, "tool")
     log.info("tool call name=%s args=%s", name, _tool_log_value(args))
     try:
-        if name == "recall_weak_concepts":
-            result = await recall_weak_concepts(**args)
-        elif name == "search_course_materials":
+        if name == "search_course_materials":
             result = await asyncio.to_thread(search_course_materials, **args)
         elif name == "search_trusted_web":
             result = await asyncio.to_thread(
@@ -820,10 +818,10 @@ async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
     return result
 
 
-def _append_history(message: dict) -> None:
-    HISTORY.append(message)
-    if len(HISTORY) > MAX_HISTORY_MESSAGES:
-        del HISTORY[:-MAX_HISTORY_MESSAGES]
+def _append_history(history: list[dict], message: dict) -> None:
+    history.append(message)
+    if len(history) > MAX_HISTORY_MESSAGES:
+        del history[:-MAX_HISTORY_MESSAGES]
 
 
 async def _stream_completion(
@@ -831,7 +829,6 @@ async def _stream_completion(
     request: dict,
     on_token: Callable[[str], Awaitable[None]],
 ):
-    """Stream text deltas while reconstructing any function calls."""
     stream = await asyncio.to_thread(client.chat.completions.create, **request, stream=True)
     content: list[str] = []
     calls: dict[int, dict] = {}
@@ -845,10 +842,7 @@ async def _stream_completion(
                 content.append(delta.content)
                 await on_token(delta.content)
             for part in delta.tool_calls or []:
-                call = calls.setdefault(
-                    part.index,
-                    {"id": "", "name": "", "arguments": ""},
-                )
+                call = calls.setdefault(part.index, {"id": "", "name": "", "arguments": ""})
                 if part.id:
                     call["id"] = part.id
                 if part.function:
@@ -858,7 +852,6 @@ async def _stream_completion(
         close = getattr(stream, "close", None)
         if close:
             await asyncio.to_thread(close)
-
     tool_calls = [
         ChatCompletionMessageFunctionToolCall(
             id=call["id"],
@@ -879,20 +872,14 @@ async def think(
     timer: StageTimer,
     mode: str = "socratic",
     on_token: Callable[[str], Awaitable[None]] | None = None,
+    *,
+    student_id: str = "default-student",
+    session_id: str = "default-session",
 ) -> tuple[str, list[str], list[str], list[dict]]:
-    """Generate one grounded response using server-prefetched context.
-
-    Args:
-        transcript: Student utterance transcribed to text.
-        timer: Collector for retrieval, tool, and model latency.
-        mode: Learner-selected explanation or Socratic mode.
-        on_token: Optional callback for streamed text deltas.
-
-    Returns:
-        Reply text, optional tool names, trusted source URLs, and visual references.
-    """
-    _append_history({"role": "user", "content": transcript})
-    context = await prefetch_context(transcript, timer)
+    """Generate one grounded response with isolated learner state."""
+    history = _conversation_history(student_id, session_id)
+    _append_history(history, {"role": "user", "content": transcript})
+    context = await prefetch_context(transcript, timer, student_id)
     client = xai_client()
     tool_messages: list[dict] = []
     tools_used: list[str] = []
@@ -906,7 +893,7 @@ async def think(
             "max_completion_tokens": int(os.environ.get("CHAT_MAX_TOKENS", "1200")),
             "messages": [
                 {"role": "system", "content": answer_instructions(mode, context)},
-                *HISTORY,
+                *history,
                 *tool_messages,
             ],
             "tools": TOOLS,
@@ -930,34 +917,30 @@ async def think(
         return name, result
 
     for _ in range(MAX_TOOL_ROUNDS):
-        started_at = time.perf_counter()
+        started = time.perf_counter()
         if on_token:
-            msg = await _stream_completion(client, completion_request(), on_token)
+            msg: ChatCompletionMessage = await _stream_completion(
+                client, completion_request(), on_token
+            )
         else:
             msg = await asyncio.to_thread(complete)
-        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
-        timer.timings_ms["grok"] = timer.timings_ms.get("grok", 0) + elapsed_ms
-        log.info("stage grok  %5d ms", elapsed_ms)
+        elapsed = round((time.perf_counter() - started) * 1000)
+        timer.timings_ms["grok"] = timer.timings_ms.get("grok", 0) + elapsed
+        log.info("stage grok  %5d ms", elapsed)
 
         if not msg.tool_calls:
-            reply_text = (
-                (msg.content or "").strip()
-                or "답변을 생성하지 못했어요. 다시 질문해 주세요."
-            )
+            reply = (msg.content or "").strip() or "답변을 생성하지 못했어요. 다시 질문해 주세요."
             if external_sources:
-                reply_text = _for_speech(reply_text)
+                reply = _for_speech(reply)
+            _append_history(history, {"role": "assistant", "content": reply})
+            get_external_brain(student_id).schedule(history, source="text")
+            return reply, tools_used, external_sources[:3], visualizations
 
-            _append_history({"role": "assistant", "content": reply_text})
-            EXTERNAL_BRAIN.schedule(HISTORY, source="text")
-            return reply_text, tools_used, external_sources[:3], visualizations
-
-        tool_messages.append(
-            {
-                "role": "assistant",
-                "content": msg.content,
-                "tool_calls": [call.model_dump() for call in msg.tool_calls],
-            }
-        )
+        tool_messages.append({
+            "role": "assistant",
+            "content": msg.content,
+            "tool_calls": [call.model_dump() for call in msg.tool_calls],
+        })
         results = await asyncio.gather(*(execute(call) for call in msg.tool_calls))
         for call, (name, result) in zip(msg.tool_calls, results):
             if name not in tools_used:
@@ -974,26 +957,12 @@ async def think(
                         visualizations.append(visual)
                 except json.JSONDecodeError:
                     pass
-            tool_messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "content": result,
-                }
-            )
+            tool_messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
 
     raise RuntimeError("Grok exceeded the tool-call round limit")
 
 
 def _for_speech(text: str) -> str:
-    """Remove URLs from speech while keeping them in screen text.
-
-    Args:
-        text: Answer containing optional source URLs.
-
-    Returns:
-        Speech-safe answer text.
-    """
     text = re.sub(
         r"\s*외부 출처\s*:?\s*(?:https?://\S+\s*,?\s*)+$",
         "",
@@ -1003,23 +972,31 @@ def _for_speech(text: str) -> str:
     return re.sub(r"https?://\S+", "", text).strip()
 
 
-def reset_conversation() -> None:
-    HISTORY.clear()
-    log.info("conversation reset")
+def reset_conversation(
+    student_id: str = "default-student",
+    session_id: str = "default-session",
+) -> None:
+    if student_id == "default-student" and session_id == "default-session":
+        HISTORY.clear()
+    else:
+        clear_history(student_id, session_id)
+    log.info("conversation reset student=%s session=%s", student_id, session_id)
 
 
-async def next_review_prompt() -> dict:
-    if not MOSS_MEMORY.is_configured:
-        return {"due": False}
-    memory = await MOSS_MEMORY.next_review()
+async def next_review_prompt(
+    student_id: str = "default-student",
+    session_id: str = "default-session",
+) -> dict:
+    memory = await _memory_store(student_id).next_review()
     if memory is None:
         return {"due": False}
     question = f"{memory['concept']}을 자신의 말로 설명해 볼까요?"
     _append_history(
+        _conversation_history(student_id, session_id),
         {
             "role": "assistant",
             "content": f"복습 질문 (memory_id={memory['id']}): {question}",
-        }
+        },
     )
     return {
         "due": True,
@@ -1029,13 +1006,8 @@ async def next_review_prompt() -> dict:
     }
 
 
-async def list_weak_concepts() -> list[dict]:
-    """Return learner-facing weak concepts with percentage mastery.
-
-    Returns:
-        Weak concepts ordered by most recently observed first.
-    """
-    memories = await MOSS_MEMORY.all_memories()
+async def list_weak_concepts(student_id: str = "default-student") -> list[dict]:
+    memories = await _memory_store(student_id).all_memories()
     return [
         {
             "memory_id": memory.get("id", ""),
@@ -1043,9 +1015,7 @@ async def list_weak_concepts() -> list[dict]:
             "concept": memory.get("concept", ""),
             "difficulty_note": memory.get("difficulty_note", ""),
             "status": memory.get("status", "new"),
-            "mastery_percent": round(
-                min(max(float(memory.get("confidence", 0)), 0), 1) * 100
-            ),
+            "mastery_percent": round(min(max(float(memory.get("confidence", 0)), 0), 1) * 100),
             "success_count": int(memory.get("success_count", 0)),
             "failure_count": int(memory.get("failure_count", 0)),
             "last_seen_at": float(memory.get("last_seen_at", 0)),
@@ -1063,12 +1033,9 @@ async def startup() -> None:
     if MOSS_MEMORY.is_configured:
         tasks.append(MOSS_MEMORY.initialize())
     else:
-        log.warning(
-            "Moss memory is not configured; set MOSS_PROJECT_ID and MOSS_PROJECT_KEY"
-        )
+        log.warning("Moss memory is not configured; local learner memory will be used")
     await asyncio.gather(*tasks)
 
 
 async def shutdown() -> None:
-    await EXTERNAL_BRAIN.flush()
-    await MOSS_MEMORY.close()
+    await close_all()
