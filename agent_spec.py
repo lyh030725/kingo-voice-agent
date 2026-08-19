@@ -48,6 +48,9 @@ Use one to three short conversational sentences with no markdown lists. Never
 read raw JSON aloud.
 """.strip()
 
+# Compatibility for tests/importers that referenced the previous module-level name.
+SYSTEM_PROMPT = VOICE_SYSTEM_PROMPT
+
 VOICE_COURSE_TOOL = {
     "type": "function",
     "name": "search_course_materials",
