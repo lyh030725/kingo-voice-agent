@@ -37,6 +37,9 @@ WS_URL = os.environ.get("XAI_REALTIME_URL", "wss://api.x.ai/v1/realtime")
 READY_TIMEOUT_S = 10
 TOOL_TIMEOUT_S = 10
 
+# Compatibility for legacy tests/default single-student callers.
+EXTERNAL_BRAIN = get_external_brain("default-student")
+
 
 class GrokTransport(Transport):
     name = "grok"
@@ -72,7 +75,6 @@ class GrokTransport(Transport):
         key = os.environ.get("XAI_API_KEY", "").strip()
         if not key:
             raise RuntimeError("XAI_API_KEY is not set")
-
         self._ws = await websockets.connect(
             f"{WS_URL}?model={MODEL}",
             additional_headers={"Authorization": f"Bearer {key}"},
@@ -108,10 +110,7 @@ class GrokTransport(Transport):
 
     async def send_audio(self, pcm: bytes) -> None:
         if self._ws is not None and not self._closed:
-            await self._send({
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(pcm).decode(),
-            })
+            await self._send({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode()})
 
     async def send_text(self, text: str) -> None:
         if self._ws is not None and not self._closed:
@@ -135,7 +134,6 @@ class GrokTransport(Transport):
             async for raw in self._ws:
                 event = json.loads(raw)
                 kind = event.get("type", "")
-
                 if kind == "session.updated":
                     self._ready.set()
                     yield SessionReady()
@@ -155,9 +153,8 @@ class GrokTransport(Transport):
                 elif kind == "input_audio_buffer.speech_stopped":
                     yield UserStoppedSpeaking()
                 elif kind == "response.output_audio.delta":
-                    if self._discard_response_output:
-                        continue
-                    yield AgentAudio(base64.b64decode(event["delta"]))
+                    if not self._discard_response_output:
+                        yield AgentAudio(base64.b64decode(event["delta"]))
                 elif kind == "response.output_audio_transcript.delta":
                     if self._discard_response_output:
                         continue
@@ -170,9 +167,7 @@ class GrokTransport(Transport):
                     call_id = event.get("call_id", "")
                     try:
                         args = json.loads(event.get("arguments") or "{}")
-                        result = await asyncio.wait_for(
-                            agent_spec.run_tool(name, args), TOOL_TIMEOUT_S
-                        )
+                        result = await asyncio.wait_for(agent_spec.run_tool(name, args), TOOL_TIMEOUT_S)
                     except TimeoutError:
                         result = {"error": f"{name} timed out"}
                     except (json.JSONDecodeError, TypeError) as exc:
@@ -229,11 +224,7 @@ class GrokTransport(Transport):
                             self._schedule_assessment()
                 elif kind.endswith("output_audio_transcript.done"):
                     self._response_transcript = event.get("transcript") or self._response_transcript
-                    if (
-                        self._response_done
-                        and self._response_transcript
-                        and not self._response_transcript_emitted
-                    ):
+                    if self._response_done and self._response_transcript and not self._response_transcript_emitted:
                         self._response_transcript_emitted = True
                         yield Transcript("agent", self._response_transcript)
                 elif kind == "error":
@@ -291,13 +282,16 @@ class GrokTransport(Transport):
     async def _refresh_memory_context(self, transcript: str) -> None:
         try:
             context = await prefetch_memory_context(transcript, self.student_id)
-            self._memory_context = context.get("weak_concepts", context)
+            next_context = context.get("weak_concepts", context)
+            if isinstance(next_context, dict) and not next_context.get("found") and "error" not in next_context:
+                next_context = {"found": False}
+            if next_context == self._memory_context:
+                return
+            self._memory_context = next_context
             if self._ws is not None and not self._closed:
                 await self._send({
                     "type": "session.update",
-                    "session": {
-                        "instructions": agent_spec.persona(self.mode, self._memory_context),
-                    },
+                    "session": {"instructions": agent_spec.persona(self.mode, self._memory_context)},
                 })
         except asyncio.CancelledError:
             raise
@@ -326,13 +320,13 @@ class GrokTransport(Transport):
         ])
         if len(self._conversation) > MAX_HISTORY_MESSAGES:
             del self._conversation[:-MAX_HISTORY_MESSAGES]
-        get_external_brain(self.student_id).schedule(self._conversation, source="realtime")
+        worker = EXTERNAL_BRAIN if self.student_id == "default-student" else get_external_brain(self.student_id)
+        worker.schedule(self._conversation, source="realtime")
         self._assessment_scheduled = True
         self._last_user_transcript = ""
 
 
 def _transcript_from_response(event: dict) -> str:
-    """Read the final transcript when xAI includes it only in response.done."""
     for item in event.get("response", {}).get("output", []):
         for content in item.get("content", []):
             transcript = content.get("transcript") or content.get("text")
