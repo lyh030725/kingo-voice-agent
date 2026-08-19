@@ -12,7 +12,12 @@ from typing import AsyncIterator
 import websockets
 
 import agent_spec
-from brain_runtime import MAX_HISTORY_MESSAGES, get_external_brain, prefetch_memory_context
+from brain_runtime import (
+    MAX_HISTORY_MESSAGES,
+    bootstrap_memory_context,
+    get_external_brain,
+    prefetch_memory_context,
+)
 from transport import (
     AGENT_RATE,
     CALLER_RATE,
@@ -36,6 +41,7 @@ VOICE = os.environ.get("GROK_VOICE") or os.environ.get("TTS_VOICE") or "eve"
 WS_URL = os.environ.get("XAI_REALTIME_URL", "wss://api.x.ai/v1/realtime")
 READY_TIMEOUT_S = 10
 TOOL_TIMEOUT_S = 10
+MEMORY_BOOTSTRAP_TIMEOUT_S = float(os.environ.get("MEMORY_BOOTSTRAP_TIMEOUT_S", "2.5"))
 
 # Compatibility for legacy tests/default single-student callers.
 EXTERNAL_BRAIN = get_external_brain("default-student")
@@ -75,6 +81,28 @@ class GrokTransport(Transport):
         key = os.environ.get("XAI_API_KEY", "").strip()
         if not key:
             raise RuntimeError("XAI_API_KEY is not set")
+
+        # Load a small recent weak-concept snapshot before the voice session is
+        # configured. Turn-specific semantic recall can refine this later, but
+        # the very first response already has personalized learner state.
+        try:
+            self._memory_context = await asyncio.wait_for(
+                bootstrap_memory_context(self.student_id),
+                MEMORY_BOOTSTRAP_TIMEOUT_S,
+            )
+            log.info(
+                "realtime memory bootstrap student=%s found=%s memories=%s",
+                self.student_id,
+                bool(self._memory_context.get("found")),
+                len(self._memory_context.get("memories", [])),
+            )
+        except TimeoutError:
+            log.warning("realtime memory bootstrap timed out student=%s", self.student_id)
+            self._memory_context = {"found": False, "recall_type": "bootstrap"}
+        except Exception:
+            log.exception("realtime memory bootstrap failed student=%s", self.student_id)
+            self._memory_context = {"found": False, "recall_type": "bootstrap"}
+
         self._ws = await websockets.connect(
             f"{WS_URL}?model={MODEL}",
             additional_headers={"Authorization": f"Bearer {key}"},
@@ -284,7 +312,7 @@ class GrokTransport(Transport):
             context = await prefetch_memory_context(transcript, self.student_id)
             next_context = context.get("weak_concepts", context)
             if isinstance(next_context, dict) and not next_context.get("found") and "error" not in next_context:
-                next_context = {"found": False}
+                next_context = {"found": False, "recall_type": next_context.get("recall_type", "semantic")}
             if next_context == self._memory_context:
                 return
             self._memory_context = next_context
