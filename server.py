@@ -1,4 +1,4 @@
-"""Week 3 KINGO VOICE TA: hands-free streaming, VAD, and Socratic RAG."""
+"""KINGO Voice Agent FastAPI server."""
 
 from __future__ import annotations
 
@@ -11,36 +11,35 @@ import logging
 import os
 import time
 import wave
-from contextlib import asynccontextmanager
 from collections import deque
+from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
-import requests
 import webrtcvad
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from brain import (
+from brain_runtime import (
     StageTimer,
     TextQuestion,
-    _for_speech,
     add_course_material,
     add_trusted_domain,
     get_course_material_path,
     get_trusted_domains,
-    list_weak_concepts,
     list_course_materials,
+    list_weak_concepts,
     next_review_prompt,
     remove_course_material,
     remove_trusted_domain,
-    require_env,
     reset_conversation,
     shutdown,
     startup,
     think,
 )
+from session_state import clean_id
 from transport import (
     AgentAudio,
     AgentTextBoundary,
@@ -58,16 +57,14 @@ from transport import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("listener")
 
+STUDENT_COOKIE = "kingo_student_id"
+SESSION_COOKIE = "kingo_session_id"
+COOKIE_MAX_AGE = 60 * 60 * 24 * 365
+ACTIVE_REALTIME: dict[tuple[str, str], tuple[WebSocket, Transport]] = {}
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Start and stop shared agent resources.
-
-    Args:
-        _app: FastAPI application instance.
-
-    Yields:
-        Control while the application is serving requests.
-    """
     await startup()
     try:
         yield
@@ -75,7 +72,53 @@ async def lifespan(_app: FastAPI):
         await shutdown()
 
 
-app = FastAPI(title="Week 3 KINGO VOICE TA Listener", lifespan=lifespan)
+app = FastAPI(title="KINGO VOICE TA", lifespan=lifespan)
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}-{uuid4().hex}"
+
+
+def _identity(request: Request | None) -> tuple[str, str]:
+    if request is None:
+        return "default-student", "default-session"
+    student_id = getattr(request.state, "student_id", None)
+    session_id = getattr(request.state, "session_id", None)
+    return (
+        clean_id(student_id or request.cookies.get(STUDENT_COOKIE), "default-student"),
+        clean_id(session_id or request.cookies.get(SESSION_COOKIE), "default-session"),
+    )
+
+
+@app.middleware("http")
+async def ensure_browser_identity(request: Request, call_next):
+    """Assign an anonymous learner identity and a replaceable chat-session id."""
+    raw_student = request.cookies.get(STUDENT_COOKIE)
+    raw_session = request.cookies.get(SESSION_COOKIE)
+    student_id = clean_id(raw_student, "") or _new_id("student")
+    session_id = clean_id(raw_session, "") or _new_id("session")
+    request.state.student_id = student_id
+    request.state.session_id = session_id
+
+    response = await call_next(request)
+    if raw_student != student_id:
+        response.set_cookie(
+            STUDENT_COOKIE,
+            student_id,
+            max_age=COOKIE_MAX_AGE,
+            httponly=True,
+            samesite="lax",
+        )
+    if raw_session != session_id:
+        response.set_cookie(
+            SESSION_COOKIE,
+            session_id,
+            max_age=COOKIE_MAX_AGE,
+            httponly=True,
+            samesite="lax",
+        )
+    return response
+
 
 COURSE_NAME = "시계열데이터처리개론"
 VALID_MODES = {"explain", "socratic"}
@@ -84,48 +127,25 @@ VALID_MODES = {"explain", "socratic"}
 class TrustedSite(BaseModel):
     url: str = Field(min_length=1, max_length=500)
 
-XAI_BASE = os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1")
 
 SAMPLE_RATE = 16000
 FRAME_MS = 20
 FRAME_BYTES = SAMPLE_RATE * FRAME_MS // 1000 * 2
-
 SILENCE_MS = int(os.environ.get("SILENCE_MS", "900"))
 PREFIX_MS = int(os.environ.get("PREFIX_MS", "300"))
 MIN_SPEECH_MS = int(os.environ.get("MIN_SPEECH_MS", "250"))
 VAD_AGGRESSIVENESS = int(os.environ.get("VAD_AGGRESSIVENESS", "2"))
-
-# Onset debounce: declare SPEAKING only after 3 speech frames in the last 5.
 ONSET_FRAMES, ONSET_WINDOW = 3, 5
 
 
-# --------------------------------------------------------------------------
-# Generation 2: webrtcvad + endpointing state machine.
-#
-# The `vad` constructor argument exists for testing: inject a stub with a
-# scripted is_speech() and the state machine becomes fully deterministic.
-# --------------------------------------------------------------------------
-
 class TurnDetector:
-    """Detect complete speech turns from fixed-size PCM frames."""
+    """Legacy deterministic endpoint detector retained for course tests."""
+
     def __init__(self, vad=None) -> None:
-        """Create detector.
-
-        Args:
-            vad: Optional VAD-compatible detector for tests.
-
-        Returns:
-            None.
-        """
         self.vad = vad or webrtcvad.Vad(VAD_AGGRESSIVENESS)
         self.reset()
 
     def reset(self) -> None:
-        """Clear accumulated turn state.
-
-        Returns:
-            None.
-        """
         self.speaking = False
         self._frames: list[bytes] = []
         self._prefix: deque[bytes] = deque(maxlen=PREFIX_MS // FRAME_MS)
@@ -134,182 +154,42 @@ class TurnDetector:
         self._speech_ms = 0
 
     def feed(self, frame: bytes) -> bytes | None:
-        """Consume one PCM frame.
-
-        Args:
-            frame: Exactly 20 ms of mono 16 kHz int16 PCM.
-
-        Returns:
-            Complete PCM utterance at endpoint, otherwise None.
-        """
         is_speech = self.vad.is_speech(frame, SAMPLE_RATE)
-
         if not self.speaking:
-            # IDLE: remember recent audio (prefix padding) and debounce onset.
             self._prefix.append(frame)
             self._onset.append(is_speech)
             if sum(self._onset) >= ONSET_FRAMES:
                 self.speaking = True
-                self._frames = list(self._prefix)   # first syllables survive
+                self._frames = list(self._prefix)
                 self._speech_ms = sum(self._onset) * FRAME_MS
                 self._quiet_ms = 0
-                log.info("[SPEECH START]")
             return None
 
-        # SPEAKING: keep everything (pauses are part of the audio), count
-        # trailing silence, and commit the turn at SILENCE_MS.
         self._frames.append(frame)
         if is_speech:
             self._speech_ms += FRAME_MS
             self._quiet_ms = 0
         else:
             self._quiet_ms += FRAME_MS
-
         if self._quiet_ms < SILENCE_MS:
             return None
 
         utterance = b"".join(self._frames)
         speech_ms = self._speech_ms
-        duration_s = len(self._frames) * FRAME_MS / 1000
         self.reset()
-
         if speech_ms < MIN_SPEECH_MS:
-            log.info("[DISCARDED] %d ms of speech — a cough, not a turn "
-                     "(this just saved you an STT + Grok call)", speech_ms)
             return None
-
-        log.info("[SPEECH END after %.1fs -> pipeline]", duration_s)
         return utterance
 
 
-# --------------------------------------------------------------------------
-# Provided plumbing — identical to the scaffold from here down.
-# --------------------------------------------------------------------------
-
 def wav_bytes(pcm: bytes) -> bytes:
-    """Wrap raw PCM in WAV.
-
-    Args:
-        pcm: Raw little-endian int16 samples.
-
-    Returns:
-        Mono 16 kHz WAV bytes.
-    """
     buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SAMPLE_RATE)
-        w.writeframes(pcm)
+    with wave.open(buf, "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(SAMPLE_RATE)
+        stream.writeframes(pcm)
     return buf.getvalue()
-
-
-def stt(pcm: bytes) -> str:
-    """Transcribe completed audio.
-
-    Args:
-        pcm: Raw mono 16 kHz int16 utterance.
-
-    Returns:
-        Recognized transcript text.
-    """
-    resp = requests.post(
-        f"{XAI_BASE}/stt",
-        headers={"Authorization": f"Bearer {require_env('XAI_API_KEY')}"},
-        files={"file": ("turn.wav", wav_bytes(pcm), "audio/wav")},
-    )
-    resp.raise_for_status()
-    return resp.json()["text"]
-
-
-def tts_stream(text: str):
-    """Stream speech audio.
-
-    Args:
-        text: Full answer; URLs are removed before speech.
-
-    Yields:
-        Successive MP3 byte chunks.
-    """
-    resp = requests.post(
-        f"{XAI_BASE}/tts",
-        headers={
-            "Authorization": f"Bearer {require_env('XAI_API_KEY')}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "text": _for_speech(text),
-            "voice_id": require_env("TTS_VOICE"),
-            "language": "ko",
-        },
-        stream=True,
-    )
-    resp.raise_for_status()
-    yield from resp.iter_content(chunk_size=4096)
-
-
-async def respond(ws: WebSocket, utterance: bytes, mode: str = "socratic") -> bool:
-    """Process and stream one turn.
-
-    Args:
-        ws: Active browser WebSocket.
-        utterance: Endpointed raw PCM audio.
-        mode: Teaching mode selected by learner.
-
-    Returns:
-        True when reply audio was sent, otherwise False.
-    """
-    t0 = time.perf_counter()
-    ms = lambda: round((time.perf_counter() - t0) * 1000)  # noqa: E731
-    timings: dict[str, int] = {}
-
-    await ws.send_json({"type": "turn", "duration_ms": len(utterance) // 32})
-    try:
-        # The blocking calls run in a worker thread (asyncio.to_thread), NOT
-        # on the event loop. This is not week-5 perfectionism — streaming
-        # DEPENDS on it: a blocked loop can't flush bytes to the socket, so
-        # without to_thread every "streamed" chunk would pile up in the
-        # transport buffer and arrive at the browser as one lump the moment
-        # the pipeline finished. (Try it: drop the to_thread wrappers and
-        # watch time-to-first-audio get exactly as bad as week 2.)
-        transcript = await asyncio.to_thread(stt, utterance)
-        timings["stt"] = ms()
-        log.info("heard: %r", transcript)
-        await ws.send_json({"type": "transcript", "text": transcript})
-
-        reply, tools_used, sources, visualizations = await think(transcript, StageTimer(), mode)
-        timings["llm"] = ms() - timings["stt"]
-        log.info("reply: %r (tools: %s)", reply, tools_used or "none")
-
-        await ws.send_json({"type": "audio_start"})
-        first_chunk_at = None
-        chunks = tts_stream(reply)
-        # next() on a requests stream blocks too — same rule, same fix.
-        while (chunk := await asyncio.to_thread(next, chunks, None)) is not None:
-            if first_chunk_at is None:
-                first_chunk_at = ms()
-                timings["tts_first"] = first_chunk_at - timings["stt"] - timings["llm"]
-            await ws.send_json({
-                "type": "audio_chunk",
-                "data": base64.b64encode(chunk).decode(),
-            })
-        timings["tts_total"] = ms() - timings["stt"] - timings["llm"]
-        timings["total"] = ms()
-        log.info("timings: %s", timings)
-
-        await ws.send_json({
-            "type": "audio_end",
-            "reply": reply,
-            "tools": tools_used,
-            "sources": sources,
-            "visualizations": visualizations,
-            "timings": timings,
-        })
-        return True
-    except Exception as exc:
-        log.exception("pipeline failed")
-        await ws.send_json({"type": "error", "message": str(exc)})
-        return False
 
 
 @app.websocket("/stream")
@@ -318,32 +198,37 @@ async def stream(ws: WebSocket) -> None:
     mode = ws.query_params.get("mode", "socratic")
     if mode not in VALID_MODES:
         mode = "socratic"
-    transport = make_transport(mode)
+    student_id = clean_id(ws.cookies.get(STUDENT_COOKIE), "default-student")
+    session_id = clean_id(ws.cookies.get(SESSION_COOKIE), "default-session")
+    transport = make_transport(mode, student_id, session_id)
+    key = (student_id, session_id)
+    ACTIVE_REALTIME[key] = (ws, transport)
     reader = asyncio.create_task(pump_provider_events(ws, transport))
     try:
         await transport.start()
         await ws.send_json({"type": "ready", "provider": transport.name})
         await pump_caller_input(ws, transport)
     except WebSocketDisconnect:
-        log.info("stream closed")
+        log.info("stream closed student=%s session=%s", student_id, session_id)
     except Exception as exc:
         log.exception("realtime voice failed")
         await try_send(ws, {"type": "error", "message": str(exc)})
     finally:
         reader.cancel()
         await asyncio.gather(reader, return_exceptions=True)
+        current = ACTIVE_REALTIME.get(key)
+        if current is not None and current[1] is transport:
+            ACTIVE_REALTIME.pop(key, None)
         await transport.close()
 
 
-def make_transport(mode: str) -> Transport:
-    """Create the Week 4 Grok realtime transport."""
+def make_transport(mode: str, student_id: str = "default-student", session_id: str = "default-session") -> Transport:
     from grok_live import GrokTransport
 
-    return GrokTransport(mode)
+    return GrokTransport(mode, student_id=student_id, session_id=session_id)
 
 
 async def pump_caller_input(ws: WebSocket, transport: Transport) -> None:
-    """Relay validated microphone frames or typed turns to the voice agent."""
     while True:
         msg = await ws.receive_json()
         if not isinstance(msg, dict):
@@ -365,7 +250,6 @@ async def pump_caller_input(ws: WebSocket, transport: Transport) -> None:
 
 
 async def pump_provider_events(ws: WebSocket, transport: Transport) -> None:
-    """Translate provider-neutral realtime events for the existing browser."""
     speaking = False
     turn_ended_at: float | None = None
     try:
@@ -432,22 +316,21 @@ async def try_send(ws: WebSocket, payload: dict) -> None:
 
 
 @app.post("/answer-text")
-async def answer_text(question: TextQuestion) -> dict:
-    """Run brain without audio.
-
-    Args:
-        question: Validated text question.
-
-    Returns:
-        Reply, tools, trusted sources, transcript, and timings.
-    """
+async def answer_text(question: TextQuestion, request: Request = None) -> dict:
     transcript = question.text.strip()
     if not transcript:
         raise HTTPException(status_code=422, detail="text must not be blank")
+    student_id, session_id = _identity(request)
     timer = StageTimer()
     try:
         with timer.stage("total"):
-            reply, tools_used, sources, visualizations = await think(transcript, timer, question.mode)
+            reply, tools_used, sources, visualizations = await think(
+                transcript,
+                timer,
+                question.mode,
+                student_id=student_id,
+                session_id=session_id,
+            )
     except Exception as exc:
         log.exception("text answer failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -462,11 +345,11 @@ async def answer_text(question: TextQuestion) -> dict:
 
 
 @app.post("/answer-text/stream")
-async def answer_text_stream(question: TextQuestion) -> StreamingResponse:
-    """Stream model text deltas followed by one result event."""
+async def answer_text_stream(question: TextQuestion, request: Request = None) -> StreamingResponse:
     transcript = question.text.strip()
     if not transcript:
         raise HTTPException(status_code=422, detail="text must not be blank")
+    student_id, session_id = _identity(request)
 
     async def events():
         queue: asyncio.Queue[dict] = asyncio.Queue()
@@ -479,7 +362,12 @@ async def answer_text_stream(question: TextQuestion) -> StreamingResponse:
             try:
                 with timer.stage("total"):
                     reply, tools_used, sources, visualizations = await think(
-                        transcript, timer, question.mode, on_token=on_token
+                        transcript,
+                        timer,
+                        question.mode,
+                        on_token=on_token,
+                        student_id=student_id,
+                        session_id=session_id,
                     )
                 await queue.put({
                     "type": "done",
@@ -510,53 +398,50 @@ async def answer_text_stream(question: TextQuestion) -> StreamingResponse:
 
 
 @app.post("/reset")
-async def reset() -> dict:
-    """Reset current conversation.
+async def reset(request: Request, response: Response) -> dict:
+    """Start a new chat while preserving the learner's persistent memory."""
+    student_id, session_id = _identity(request)
+    reset_conversation(student_id, session_id)
+    active = ACTIVE_REALTIME.pop((student_id, session_id), None)
+    if active is not None:
+        browser, transport = active
+        await transport.close()
+        try:
+            await browser.close(code=1000)
+        except Exception:
+            pass
 
-    Returns:
-        Success marker; persistent weak concepts remain.
-    """
-    reset_conversation()
-    return {"ok": True}
+    next_session = _new_id("session")
+    response.set_cookie(
+        SESSION_COOKIE,
+        next_session,
+        max_age=COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+    )
+    request.state.session_id = next_session
+    return {"ok": True, "session_reset": True}
 
 
 @app.get("/review")
-async def review() -> dict:
-    """Fetch next due review.
-
-    Returns:
-        Due flag and optional weak-concept question.
-    """
-    return await next_review_prompt()
+async def review(request: Request = None) -> dict:
+    student_id, session_id = _identity(request)
+    return await next_review_prompt(student_id, session_id)
 
 
 @app.get("/api/weak-concepts")
-async def weak_concepts() -> dict:
-    """List the current learner's weak concepts and mastery percentages."""
-    return {"concepts": await list_weak_concepts()}
-
+async def weak_concepts(request: Request = None) -> dict:
+    student_id, _ = _identity(request)
+    return {"concepts": await list_weak_concepts(student_id)}
 
 
 @app.get("/api/materials")
 async def materials() -> dict:
-    """List course PDFs available to the agent.
-
-    Returns:
-        Course name and uploaded material records.
-    """
     return {"course": COURSE_NAME, "materials": list_course_materials()}
 
 
 @app.get("/api/materials/{filename}", response_class=FileResponse)
 async def course_material_file(filename: str) -> FileResponse:
-    """Display one uploaded course PDF in the browser.
-
-    Args:
-        filename: Plain uploaded PDF filename.
-
-    Returns:
-        Inline PDF response used by page visualizations.
-    """
     try:
         path = get_course_material_path(filename)
     except FileNotFoundError as exc:
@@ -573,14 +458,6 @@ async def course_material_file(filename: str) -> FileResponse:
 
 @app.post("/api/materials")
 async def upload_material(request: Request) -> dict:
-    """Upload one raw PDF request body.
-
-    Args:
-        request: Request with filename query parameter and PDF body.
-
-    Returns:
-        Saved material record.
-    """
     filename = request.query_params.get("filename", "")
     content = await request.body()
     if not content:
@@ -594,7 +471,6 @@ async def upload_material(request: Request) -> dict:
 
 @app.delete("/api/materials")
 async def delete_material(request: Request) -> dict:
-    """Delete one professor-uploaded PDF."""
     filename = request.query_params.get("filename", "")
     try:
         remove_course_material(filename)
@@ -607,24 +483,11 @@ async def delete_material(request: Request) -> dict:
 
 @app.get("/api/trusted-sites")
 async def trusted_sites() -> dict:
-    """List professor-managed web-search domains.
-
-    Returns:
-        Current trusted domain allowlist.
-    """
     return {"sites": get_trusted_domains()}
 
 
 @app.post("/api/trusted-sites")
 async def create_trusted_site(site: TrustedSite) -> dict:
-    """Add one trusted web-search domain.
-
-    Args:
-        site: URL or hostname supplied by professor.
-
-    Returns:
-        Updated trusted domain allowlist.
-    """
     try:
         return {"sites": add_trusted_domain(site.url)}
     except ValueError as exc:
@@ -633,14 +496,6 @@ async def create_trusted_site(site: TrustedSite) -> dict:
 
 @app.delete("/api/trusted-sites")
 async def delete_trusted_site(site: TrustedSite) -> dict:
-    """Delete one trusted web-search domain.
-
-    Args:
-        site: URL or hostname supplied by professor.
-
-    Returns:
-        Updated trusted domain allowlist.
-    """
     try:
         return {"sites": remove_trusted_domain(site.url)}
     except ValueError as exc:

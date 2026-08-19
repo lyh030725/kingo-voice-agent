@@ -13,9 +13,10 @@
 - 학습자 텍스트 채팅과 핸즈프리 음성 대화(마이크 없는 환경의 텍스트 음성 에이전트 테스트 포함)
 - 수식·단계 도식·좌표 그래프·강의자료 PDF 페이지 visualization 카드
 - 설명·소크라테스 답변 모드
-- 강의자료 PDF RAG와 파일명·페이지 출처
+- lexical + embedding hybrid 강의자료 PDF RAG와 파일명·페이지 출처
 - Moss 기반 취약 개념 저장·회상·간격 복습
-- 서버 선행 retrieval + 2개 선택적 function tool
+- 학습자별 persistent memory와 채팅 session별 conversation history 분리
+- 음성에서 learner-memory server prefetch + filler-backed course-PDF tool
 
 ## 빠른 시작
 
@@ -29,26 +30,41 @@ cp .env.example .env
 uv run uvicorn server:app --port 8000
 ```
 
-`.env`에 `XAI_API_KEY`, `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`를 입력하고 Chrome 또는 Edge에서 <http://localhost:8000>에 접속합니다. 음성 모델은 최신 별칭인 `grok-voice-latest`, 기본 voice는 `eve`입니다.
+`.env`에 `XAI_API_KEY`, `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`를 입력하고 Chrome 또는 Edge에서 <http://localhost:8000>에 접속합니다. 음성 모델은 `grok-voice-latest`, 기본 voice는 `eve`입니다.
 
-취약 개념은 Moss와 함께 `memory/weak-concepts.json`에도 저장됩니다. Moss 사용 한도 오류가 발생하면 서버는 중단되지 않고 해당 프로세스 동안 로컬 파일에서 저장·회상·복습을 계속합니다.
+취약 개념은 학습자별 Moss metadata/filter로 분리되고 로컬 fallback도 학습자별 파일에 저장됩니다. Moss 사용 한도 오류가 발생하면 서버는 중단되지 않고 해당 프로세스 동안 로컬 파일에서 저장·회상·복습을 계속합니다.
+
+PDF retrieval은 기본적으로 lexical score와 `grok-embedding-small` cosine similarity를 결합합니다. embedding 호출에 실패하면 lexical retrieval로 자동 fallback합니다. `PDF_SEMANTIC_RETRIEVAL=0`으로 semantic retrieval을 끌 수 있고, `PDF_LEXICAL_WEIGHT`로 lexical 비중을 조절할 수 있습니다.
 
 ## Retrieval과 에이전트 도구
 
-| 단계 | 실행 주체 | 역할 |
-| --- | --- | --- |
-| learner-memory prefetch | 서버 | 현재 질문과 관련된 학습자의 취약 개념을 선행 조회 |
-| course-PDF prefetch | 서버 | 교수자가 업로드한 PDF에서 근거를 선행 검색 |
-| `search_trusted_web` | Grok 선택적 tool | PDF 근거가 부족할 때 허용 도메인만 검색 |
-| `show_visualization` | Grok 선택적 tool | 수식·흐름·그래프·PDF 페이지를 채팅에 표시 |
+텍스트와 realtime 음성은 latency 특성에 맞춰 retrieval policy를 다르게 사용합니다.
 
-텍스트와 음성 요청은 같은 `prefetch_context()`와 최종 답변 정책을 사용합니다. 모든 turn은 모델 호출 전에 서버가 기억 회상과 강의자료 검색을 병렬로 수행하고, 그 결과를 Grok의 preloaded context로 전달합니다. 따라서 mandatory retrieval은 모델의 tool selection에 의존하지 않습니다.
+| 경로 | 단계 | 실행 주체 | 역할 |
+| --- | --- | --- | --- |
+| text | learner-memory prefetch | 서버 | 현재 질문과 관련된 학습자의 취약 개념 선행 조회 |
+| text | course-PDF prefetch | 서버 | hybrid PDF 검색을 모델 호출 전에 병렬 실행 |
+| voice | learner-memory prefetch | 서버 | realtime transcription을 이용해 관련 memory를 자동 조회하고 session instructions에 주입 |
+| voice | `search_course_materials` | Grok tool | 강의/개념 질문에서 topic-specific filler 직후 hybrid PDF 검색 |
+| both | `search_trusted_web` | Grok 선택적 tool | PDF 근거가 부족할 때 허용 도메인만 검색 |
+| both | `show_visualization` | Grok 선택적 tool | 수식·흐름·그래프·PDF 페이지를 채팅에 표시 |
 
-Grok에게 노출되는 function tool은 `search_trusted_web`과 `show_visualization`뿐입니다. PDF 근거가 부족할 때만 web search를 선택적으로 호출하고, 수식·도식·그래프 또는 PDF 페이지가 필요할 때 visualization을 호출합니다.
+Realtime Grok에게 노출되는 function tool은 정확히 `search_course_materials`, `search_trusted_web`, `show_visualization` 세 개입니다. `recall_weak_concepts`는 tool이 아니라 서버 인프라로 실행됩니다. 따라서 학습자 memory는 모델의 tool-selection 성공 여부에 의존하지 않고, 강의자료 검색만 실제 retrieval latency를 자연스러운 filler 음성으로 가릴 수 있습니다.
 
-`save_weak_concept`와 `review_weak_concept` 판단은 음성 모델의 tool에서 분리되어, 매 turn 종료 뒤 text Grok External Brain이 최근 대화 맥락과 기존 기억을 검토하는 백그라운드 작업으로 실행합니다. 의미상 중복된 개념은 저장하지 않고, 현재 주제를 실제로 따라간 증거가 있는 기존 개념만 이해도를 갱신합니다.
-서버 터미널의 `external brain scheduled`, `started`, `context ready`, `decided`, `completed` 로그를 같은 `id`로 따라가면 턴별 전달과 저장·평가 결과를 확인할 수 있습니다. `source=text`는 텍스트 채팅, `source=realtime`은 음성 세션입니다.
-수학식이나 도식이 설명에 필요하면 TA는 내용을 그대로 읽지 않고 visualization tool을 호출한 뒤 “제가 보여드린 그림처럼”이라고 참조해 설명합니다. 사용자가 근거 강의자료 페이지를 요청하면 검증된 PDF 파일명과 페이지 번호로 해당 한 페이지만 채팅 안에 크게 표시합니다.
+텍스트 경로는 filler가 필요 없으므로 memory와 PDF를 모델 호출 전에 병렬 prefetch합니다. 음성 경로는 누적 realtime transcript가 들어오는 동안 memory recall을 선행하고, course-content 질문이면 Grok이 짧은 filler를 말한 직후 `search_course_materials`를 호출합니다.
+
+`save_weak_concept`와 `review_weak_concept` 판단은 음성 모델의 tool에서 분리되어, 매 turn 종료 뒤 text Grok External Brain이 최근 대화 맥락과 기존 기억을 검토하는 비동기 작업으로 실행합니다. realtime에서도 turn마다 assessment gate를 다시 열어 각 완료 turn을 독립적으로 평가합니다.
+
+## Session과 New Chat
+
+브라우저에는 두 개의 익명 HttpOnly cookie를 사용합니다.
+
+- `kingo_student_id`: persistent learner memory의 주체. New Chat을 눌러도 유지됩니다.
+- `kingo_session_id`: 현재 채팅 history와 realtime 연결의 주체. New Chat마다 새 값으로 교체됩니다.
+
+따라서 서로 다른 브라우저 학습자의 text history와 memory가 섞이지 않고, 같은 학습자도 New Chat을 누르면 이전 conversation history를 이어받지 않습니다. 음성 연결이 살아 있는 상태에서 New Chat을 누르면 서버가 해당 realtime provider 연결도 닫은 뒤 새 session id를 발급합니다.
+
+현재 식별 방식은 인증 전 MVP용 익명 cookie입니다. 실제 i-Campus 인증을 붙일 때는 `kingo_student_id` 대신 인증된 사용자 ID를 사용하면 됩니다.
 
 ## API
 
@@ -61,8 +77,8 @@ Grok에게 노출되는 function tool은 `search_trusted_web`과 `show_visualiza
 | `GET/POST`        | `/api/materials`     | 강의자료 조회·PDF 업로드                               |
 | `GET`             | `/api/materials/{filename}` | 업로드된 PDF를 브라우저에 inline 표시           |
 | `GET/POST/DELETE` | `/api/trusted-sites` | 신뢰 도메인 조회·추가·삭제(최대 5개)                   |
-| `GET`             | `/review`            | 복습할 취약 개념 조회                                  |
-| `POST`            | `/reset`             | 현재 대화 이력 초기화                                  |
+| `GET`             | `/review`            | 현재 학습자의 복습할 취약 개념 조회                    |
+| `POST`            | `/reset`             | 현재 session history와 realtime 연결 초기화            |
 
 텍스트 요청 예시:
 
@@ -75,7 +91,9 @@ curl http://localhost:8000/answer-text \
 ## 음성 처리 흐름
 
 ```text
-AudioWorklet → WebSocket → xAI Grok Voice Agent (server VAD + optional tools)
+AudioWorklet → WebSocket → xAI Grok Voice Agent
+                         ↘ server learner-memory prefetch
+                           Grok filler → search_course_materials
 → 24kHz PCM → Web Audio 예약 재생
 ```
 
@@ -92,4 +110,4 @@ uv sync
 VOICE_AI_SKIP_DOTENV=1 uv run python -m unittest discover -s tests -v
 ```
 
-프로젝트는 별도 빌드 단계가 없는 FastAPI 애플리케이션입니다. 교수자가 올린 PDF, 로컬 기억, 검색 감사 로그와 실제 환경변수는 Git에서 제외됩니다.
+프로젝트는 별도 빌드 단계가 없는 FastAPI 애플리케이션입니다. 교수자가 올린 PDF, 학습자별 로컬 기억, 검색 감사 로그와 실제 환경변수는 Git에서 제외됩니다.
