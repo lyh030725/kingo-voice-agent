@@ -36,6 +36,17 @@ class VoicePromptContractTests(unittest.TestCase):
         self.assertIn("End every response with exactly one question", prompt)
         self.assertIn("Maximum two short spoken sentences", prompt)
 
+    def test_realtime_socratic_prompt_treats_visual_as_clue(self) -> None:
+        prompt = agent_spec.persona("socratic")
+        self.assertIn("# Socratic visual priority", prompt)
+        self.assertIn("MUST call show_visualization before the one Socratic", prompt)
+        self.assertIn("no-answer/worked-example rule applies to speech", prompt)
+        self.assertLess(
+            prompt.index("# Socratic visual priority"),
+            prompt.index("# Recent weak concepts"),
+        )
+        self.assertNotIn("# Socratic visual priority", agent_spec.persona("explain"))
+
     def test_search_results_only_remind_the_current_mode_and_visual_preference(self) -> None:
         for instruction in (
             agent_spec.COURSE_RESULT_INSTRUCTION,
