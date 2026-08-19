@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from brain_runtime import (
+from brain import (
     StageTimer,
     TextQuestion,
     add_course_material,
@@ -222,7 +222,11 @@ async def stream(ws: WebSocket) -> None:
         await transport.close()
 
 
-def make_transport(mode: str, student_id: str = "default-student", session_id: str = "default-session") -> Transport:
+def make_transport(
+    mode: str,
+    student_id: str = "default-student",
+    session_id: str = "default-session",
+) -> Transport:
     from grok_live import GrokTransport
 
     return GrokTransport(mode, student_id=student_id, session_id=session_id)
@@ -269,16 +273,22 @@ async def pump_provider_events(ws: WebSocket, transport: Transport) -> None:
                         speaking = True
                         await ws.send_json({"type": "state", "value": "speaking"})
                         if turn_ended_at is not None:
-                            await ws.send_json({
-                                "type": "latency",
-                                "ms": round((time.perf_counter() - turn_ended_at) * 1000),
-                            })
+                            await ws.send_json(
+                                {
+                                    "type": "latency",
+                                    "ms": round(
+                                        (time.perf_counter() - turn_ended_at) * 1000
+                                    ),
+                                }
+                            )
                             turn_ended_at = None
-                    await ws.send_json({
-                        "type": "audio",
-                        "data": base64.b64encode(pcm).decode(),
-                        "rate": rate,
-                    })
+                    await ws.send_json(
+                        {
+                            "type": "audio",
+                            "data": base64.b64encode(pcm).decode(),
+                            "rate": rate,
+                        }
+                    )
                 case AgentTextDelta(text=text) if text:
                     await ws.send_json({"type": "token", "text": text})
                 case AgentTextBoundary():
@@ -287,17 +297,28 @@ async def pump_provider_events(ws: WebSocket, transport: Transport) -> None:
                     speaking = False
                     await ws.send_json({"type": "turn_done"})
                 case Transcript(who=who, text=text) if text:
-                    await ws.send_json({"type": "transcript", "who": who, "text": text})
+                    await ws.send_json(
+                        {"type": "transcript", "who": who, "text": text}
+                    )
                 case ToolCalled(name=name, result=result):
                     await ws.send_json({"type": "tool", "name": name})
                     if name == "show_visualization" and isinstance(result, dict):
                         if "error" in result:
-                            await ws.send_json({
-                                "type": "visualization_error",
-                                "message": "시각자료를 표시하지 못했어요. 다시 요청해 주세요.",
-                            })
+                            await ws.send_json(
+                                {
+                                    "type": "visualization_error",
+                                    "message": (
+                                        "시각자료를 표시하지 못했어요. 다시 요청해 주세요."
+                                    ),
+                                }
+                            )
                         else:
-                            await ws.send_json({"type": "visualization", "visualization": result})
+                            await ws.send_json(
+                                {
+                                    "type": "visualization",
+                                    "visualization": result,
+                                }
+                            )
                 case Failed(message=message):
                     await ws.send_json({"type": "error", "message": message})
                     return
@@ -345,7 +366,9 @@ async def answer_text(question: TextQuestion, request: Request = None) -> dict:
 
 
 @app.post("/answer-text/stream")
-async def answer_text_stream(question: TextQuestion, request: Request = None) -> StreamingResponse:
+async def answer_text_stream(
+    question: TextQuestion, request: Request = None
+) -> StreamingResponse:
     transcript = question.text.strip()
     if not transcript:
         raise HTTPException(status_code=422, detail="text must not be blank")
@@ -369,15 +392,17 @@ async def answer_text_stream(question: TextQuestion, request: Request = None) ->
                         student_id=student_id,
                         session_id=session_id,
                     )
-                await queue.put({
-                    "type": "done",
-                    "transcript": transcript,
-                    "reply": reply,
-                    "tools": tools_used,
-                    "sources": sources,
-                    "visualizations": visualizations,
-                    "timings": timer.timings_ms,
-                })
+                await queue.put(
+                    {
+                        "type": "done",
+                        "transcript": transcript,
+                        "reply": reply,
+                        "tools": tools_used,
+                        "sources": sources,
+                        "visualizations": visualizations,
+                        "timings": timer.timings_ms,
+                    }
+                )
             except Exception as exc:
                 log.exception("streaming text answer failed")
                 await queue.put({"type": "error", "message": str(exc)})
@@ -445,7 +470,9 @@ async def course_material_file(filename: str) -> FileResponse:
     try:
         path = get_course_material_path(filename)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="course material not found") from exc
+        raise HTTPException(
+            status_code=404, detail="course material not found"
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return FileResponse(
@@ -475,7 +502,9 @@ async def delete_material(request: Request) -> dict:
     try:
         remove_course_material(filename)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="course material not found") from exc
+        raise HTTPException(
+            status_code=404, detail="course material not found"
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
