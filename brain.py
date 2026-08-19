@@ -19,7 +19,6 @@ from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageFuncti
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
-from external_brain import ExternalBrain
 from moss_memory import MossMemoryStore
 from pdf_retrieval import clear_embedding_cache, hybrid_rank
 from session_state import (
@@ -53,14 +52,17 @@ PDF_MAX_RESULTS = 3
 PDF_PAGE_CACHE: list[dict] | None = None
 MAX_HISTORY_MESSAGES = 12
 MAX_TOOL_ROUNDS = 6
-MEMORY_TOP_K = max(1, int(os.environ.get("MEMORY_TOP_K", "3")))
+MEMORY_TOP_K = 3
 
 MEMORY_GUIDANCE = """
 # Learner memory
-The supplied memories are this student's past weak concepts. Use them only when relevant.
-If relevant, naturally mention the prior difficulty once and adapt the next question or explanation.
-If recall_type is `recent`, answer the learner's past-learning question from the supplied records.
-Never invent learner history or force an unrelated memory into the conversation.
+The server supplies up to three of this student's most recently observed weak
+concepts, newest first. Use a memory only when it is relevant to the current
+conversation. When relevant, naturally acknowledge the prior difficulty once
+and adapt the next question or explanation to it. If the learner asks what they
+recently struggled with or studied, answer from these records while making clear
+they are weak-concept history, not a complete study log. Never invent learner
+history or force an unrelated memory into the conversation.
 """.strip()
 
 
@@ -118,11 +120,11 @@ as 한다, 이다, and 하였다, and avoid textbook or report-like prose unless
 quoting a source.
 
 # Context
-Before every answer, the server provides relevant learner-memory context and
-course-PDF evidence. Use that preloaded context to personalize hints, check
-prerequisites, and ground factual claims. Do not ask for or invoke separate
-memory/PDF retrieval tools. If the course evidence is missing or insufficient,
-trusted web search is allowed.
+Before every answer, the server provides learner-memory context and course-PDF
+evidence. Use learner memory only when relevant, and use course evidence to
+ground factual claims. Do not ask for or invoke a separate memory retrieval
+tool. If course evidence is missing or insufficient, trusted web search is
+allowed.
 
 # Tool usage
 search_trusted_web: Call only when the preloaded course-PDF evidence is missing
@@ -130,8 +132,7 @@ or insufficient.
 
 show_visualization: Call before the final answer when it would otherwise
 contain a formula, process diagram, graph, or other visual data. Also call it
-with kind pdf when the student asks to see a referenced course PDF page. Follow
-all visualization rules below.
+with kind pdf when the student asks to see a referenced course PDF page.
 
 # Evidence and source rules
 Base factual claims only on the preloaded context and tool results. For PDF
@@ -143,18 +144,13 @@ in the conversational answer.
 # Visualization rules
 Never put raw equations, symbolic notation, diagrams, or coordinate data in
 the conversational answer and never read them symbol by symbol. When the
-answer would otherwise contain a formula, process diagram, or graph, you MUST
-call show_visualization first and put the exact visual data only in that tool.
+answer would otherwise contain a formula, process diagram, or graph, call
+show_visualization first and put the exact visual data only in that tool.
 Treat any mathematical expression—including a single equation, variable
 relationship, Greek letter, fraction, exponent, subscript, or LaTeX—as a
-formula. When unsure whether visual support is useful, prefer calling
-show_visualization. Do not send the final conversational answer until that tool
-has succeeded. In the spoken answer, explain only what the visual means; never
-repeat its LaTeX, symbols, equation, or coordinates, even when quoting a PDF.
-Then explain it naturally with a reference such as '제가 보여드린 그림처럼'.
-For a PDF visualization, use the exact filename and page from the preloaded
-course evidence, the student's explicit request, or a prior assistant
-reference; never invent a file or page number.
+formula. Do not send the final conversational answer until that tool has
+succeeded. In the spoken answer, explain only what the visual means and never
+repeat its raw symbols or coordinates.
 
 # Output format
 Use one to three short conversational sentences with no markdown lists. Never
@@ -199,10 +195,13 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Focused external search query."},
+                    "query": {
+                        "type": "string",
+                        "description": "Focused external search query.",
+                    },
                     "reason": {
                         "type": "string",
-                        "description": "Specific gap in the preloaded course-PDF evidence.",
+                        "description": "Specific gap in the course-PDF evidence.",
                     },
                 },
                 "required": ["query", "reason"],
@@ -224,15 +223,27 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "Short Korean title."},
-                    "kind": {"type": "string", "enum": ["formula", "flow", "plot", "pdf"]},
-                    "caption": {"type": "string", "description": "One concise Korean takeaway."},
-                    "latex": {"type": "string", "description": "Raw LaTeX; empty unless formula."},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["formula", "flow", "plot", "pdf"],
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": "One concise Korean takeaway.",
+                    },
+                    "latex": {
+                        "type": "string",
+                        "description": "Raw LaTeX; empty unless formula.",
+                    },
                     "labels": {"type": "array", "items": {"type": "string"}},
                     "points": {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+                            "properties": {
+                                "x": {"type": "number"},
+                                "y": {"type": "number"},
+                            },
                             "required": ["x", "y"],
                             "additionalProperties": False,
                         },
@@ -243,8 +254,16 @@ TOOLS = [
                     "page": {"type": "integer", "minimum": 0},
                 },
                 "required": [
-                    "title", "kind", "caption", "latex", "labels", "points",
-                    "x_label", "y_label", "file", "page",
+                    "title",
+                    "kind",
+                    "caption",
+                    "latex",
+                    "labels",
+                    "points",
+                    "x_label",
+                    "y_label",
+                    "file",
+                    "page",
                 ],
                 "additionalProperties": False,
             },
@@ -270,8 +289,7 @@ def xai_client() -> OpenAI:
     )
 
 
-# Compatibility aliases for legacy single-student tests/callers. Runtime code below
-# still isolates non-default students and sessions through session_state.
+# Compatibility aliases for older single-student tests/callers.
 MOSS_MEMORY = memory_for("default-student")
 HISTORY = history_for("default-student", "default-session")
 EXTERNAL_BRAIN = external_brain_for("default-student", xai_client)
@@ -282,7 +300,11 @@ def _memory_store(student_id: str) -> MossMemoryStore:
 
 
 def get_external_brain(student_id: str):
-    return EXTERNAL_BRAIN if student_id == "default-student" else external_brain_for(student_id, xai_client)
+    return (
+        EXTERNAL_BRAIN
+        if student_id == "default-student"
+        else external_brain_for(student_id, xai_client)
+    )
 
 
 def _conversation_history(student_id: str, session_id: str) -> list[dict]:
@@ -401,7 +423,9 @@ def _tool_log_value(value: object, limit: int = 600) -> str:
             value = json.loads(value)
         except json.JSONDecodeError:
             pass
-    text = json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+    text = json.dumps(
+        value, ensure_ascii=False, default=str, separators=(",", ":")
+    )
     return text if len(text) <= limit else f"{text[:limit]}…"
 
 
@@ -442,19 +466,6 @@ def _terms(text: str) -> set[str]:
     }
 
 
-def _is_recent_memory_query(topic: str) -> bool:
-    normalized = " ".join(topic.casefold().split())
-    markers = (
-        "저번에 공부", "지난번에 공부", "전에 공부", "최근에 공부", "뭐 공부했",
-        "뭘 공부했", "무엇을 공부", "어떤 걸 공부", "어떤 거 공부", "마지막으로 공부",
-        "저번에 뭐", "지난번에 뭐", "최근에 뭐", "전에 뭐 어려", "저번에 어려",
-        "지난번에 어려", "최근에 어려", "내 취약 개념", "내가 취약", "내가 어려워",
-        "기억하고 있는 취약", "last time", "recently studied", "previously studied",
-        "what did i study", "what was i weak at",
-    )
-    return any(marker in normalized for marker in markers)
-
-
 def _compact_memory(memory: dict) -> dict:
     record = {
         "concept": memory.get("concept", ""),
@@ -467,23 +478,12 @@ def _compact_memory(memory: dict) -> dict:
     return record
 
 
-def _compact_memory_response(topic: str, memories: list[dict], recall_type: str) -> dict:
-    compact = [_compact_memory(memory) for memory in memories[:MEMORY_TOP_K]]
-    compact = [memory for memory in compact if memory["concept"]]
-    return {
-        "found": bool(compact),
-        "recall_type": recall_type,
-        "memories": compact,
-    }
-
-
 async def recent_weak_concepts(
     student_id: str = "default-student",
     *,
     top_k: int = MEMORY_TOP_K,
-    topic: str = "recent learner memory",
-    recall_type: str = "recent",
 ) -> dict:
+    """Return the learner's most recently observed weak concepts."""
     memories = await _memory_store(student_id).all_memories()
     memories.sort(
         key=lambda item: (
@@ -494,47 +494,29 @@ async def recent_weak_concepts(
     )
     compact = [_compact_memory(memory) for memory in memories[:top_k]]
     compact = [memory for memory in compact if memory["concept"]]
-    return {"found": bool(compact), "recall_type": recall_type, "memories": compact}
+    return {"found": bool(compact), "memories": compact}
 
 
 async def bootstrap_memory_context(student_id: str = "default-student") -> dict:
-    """Return three compact recent weak concepts for realtime startup."""
-    return await recent_weak_concepts(
-        student_id,
-        top_k=MEMORY_TOP_K,
-        topic="realtime session bootstrap",
-        recall_type="bootstrap",
-    )
+    """Return the three most recent compact weak concepts for realtime startup."""
+    return await recent_weak_concepts(student_id, top_k=MEMORY_TOP_K)
 
 
 async def recall_weak_concepts(
-    topic: str,
+    topic: str = "",
     student_id: str = "default-student",
 ) -> str:
-    """Recall compact weak concepts relevant to a student turn.
+    """Return recent learner weak concepts for server-side prefetch.
 
     Args:
-        topic: Current student question or concept.
+        topic: Kept for compatibility; recent-memory selection does not depend on it.
         student_id: Learner identity used to isolate memory.
 
     Returns:
-        JSON with at most three compact weak-concept records.
+        JSON with the three most recently observed compact weak-concept records.
     """
-    topic = topic.strip()
-    if not topic:
-        return _json({"found": False, "recall_type": "semantic", "memories": []})
-    if _is_recent_memory_query(topic):
-        return _json(
-            await recent_weak_concepts(
-                student_id,
-                top_k=MEMORY_TOP_K,
-                topic=topic,
-                recall_type="recent",
-            )
-        )
-    result = await _memory_store(student_id).recall(topic, top_k=MEMORY_TOP_K)
-    memories = result.get("memories", []) if isinstance(result, dict) else []
-    return _json(_compact_memory_response(topic, memories, "semantic"))
+    del topic
+    return _json(await recent_weak_concepts(student_id, top_k=MEMORY_TOP_K))
 
 
 def _pdf_pages() -> list[dict]:
@@ -548,11 +530,13 @@ def _pdf_pages() -> list[dict]:
             for page_number, page in enumerate(reader.pages, start=1):
                 text = (page.extract_text() or "").strip()
                 if text:
-                    pages.append({
-                        "file": pdf_path.name,
-                        "page": page_number,
-                        "text": re.sub(r"\s+", " ", text),
-                    })
+                    pages.append(
+                        {
+                            "file": pdf_path.name,
+                            "page": page_number,
+                            "text": re.sub(r"\s+", " ", text),
+                        }
+                    )
         except Exception:
             log.exception("failed to index PDF: %s", pdf_path)
     PDF_PAGE_CACHE = pages
@@ -595,21 +579,23 @@ def search_course_materials(query: str) -> str:
         }
         for score, page in ranked[:PDF_MAX_RESULTS]
     ]
-    return _json({
-        "found": bool(results),
-        "query": query,
-        "retrieval_mode": retrieval_mode,
-        "results": results,
-        "instruction": (
-            "Use filename and page in the answer."
-            if results
-            else "No PDF evidence found; trusted web search is now allowed."
-        ),
-    })
+    return _json(
+        {
+            "found": bool(results),
+            "query": query,
+            "retrieval_mode": retrieval_mode,
+            "results": results,
+            "instruction": (
+                "Use filename and page in the answer."
+                if results
+                else "No PDF evidence found; trusted web search is now allowed."
+            ),
+        }
+    )
 
 
 async def prefetch_memory_context(question: str, student_id: str) -> dict:
-    """Prepare only compact learner memory for realtime voice."""
+    """Prepare only the three most recent compact learner memories for voice."""
     topic = question.strip()
     try:
         raw = await recall_weak_concepts(topic, student_id)
@@ -654,7 +640,9 @@ async def prefetch_context(
             if timer is not None:
                 timer.record("pdf", started)
 
-    memory_raw, pdf_raw = await asyncio.gather(recall(), search_pdf(), return_exceptions=True)
+    memory_raw, pdf_raw = await asyncio.gather(
+        recall(), search_pdf(), return_exceptions=True
+    )
 
     def decode(value: object, source: str) -> object:
         if isinstance(value, Exception):
@@ -695,12 +683,19 @@ def answer_instructions(mode: str, context: dict) -> str:
 
 def _trusted_urls(response) -> list[str]:
     payload = response.model_dump() if hasattr(response, "model_dump") else {}
-    candidates = set(re.findall(r"https?://[^\s\]\)\"']+", json.dumps(payload)))
-    candidates.update(re.findall(r"https?://[^\s\]\)\"']+", response.output_text or ""))
+    candidates = set(
+        re.findall(r'https?://[^\s\]\)"\']+', json.dumps(payload))
+    )
+    candidates.update(
+        re.findall(r'https?://[^\s\]\)"\']+', response.output_text or "")
+    )
     trusted = []
     for url in sorted(candidates):
         host = urlparse(url.rstrip(".,;")).hostname or ""
-        if any(host == domain or host.endswith("." + domain) for domain in get_trusted_domains()):
+        if any(
+            host == domain or host.endswith("." + domain)
+            for domain in get_trusted_domains()
+        ):
             trusted.append(url.rstrip(".,;"))
     return trusted
 
@@ -739,15 +734,19 @@ def search_trusted_web(
             },
             {"role": "user", "content": query},
         ],
-        tools=[{
-            "type": "web_search",
-            "filters": {"allowed_domains": list(get_trusted_domains())},
-        }],
+        tools=[
+            {
+                "type": "web_search",
+                "filters": {"allowed_domains": list(get_trusted_domains())},
+            }
+        ],
     )
     answer = (response.output_text or "").strip()
     sources = _trusted_urls(response)
     if not answer or not sources:
-        return _json({"error": "trusted web search returned no citable sources", "query": query})
+        return _json(
+            {"error": "trusted web search returned no citable sources", "query": query}
+        )
     record = {
         "query": query,
         "answer": answer,
@@ -759,12 +758,16 @@ def search_trusted_web(
     WEB_SEARCH_LOG.parent.mkdir(parents=True, exist_ok=True)
     with WEB_SEARCH_LOG.open("a", encoding="utf-8") as file:
         file.write(_json(record) + "\n")
-    return _json({
-        "found": True,
-        "answer": answer,
-        "sources": sources,
-        "instruction": "The UI displays source URLs separately; do not repeat them in the answer.",
-    })
+    return _json(
+        {
+            "found": True,
+            "answer": answer,
+            "sources": sources,
+            "instruction": (
+                "The UI displays source URLs separately; do not repeat them in the answer."
+            ),
+        }
+    )
 
 
 async def run_tool(name: str, args: dict, timer: StageTimer) -> str:
@@ -829,7 +832,9 @@ async def _stream_completion(
     request: dict,
     on_token: Callable[[str], Awaitable[None]],
 ):
-    stream = await asyncio.to_thread(client.chat.completions.create, **request, stream=True)
+    stream = await asyncio.to_thread(
+        client.chat.completions.create, **request, stream=True
+    )
     content: list[str] = []
     calls: dict[int, dict] = {}
     sentinel = object()
@@ -842,7 +847,9 @@ async def _stream_completion(
                 content.append(delta.content)
                 await on_token(delta.content)
             for part in delta.tool_calls or []:
-                call = calls.setdefault(part.index, {"id": "", "name": "", "arguments": ""})
+                call = calls.setdefault(
+                    part.index, {"id": "", "name": "", "arguments": ""}
+                )
                 if part.id:
                     call["id"] = part.id
                 if part.function:
@@ -852,6 +859,7 @@ async def _stream_completion(
         close = getattr(stream, "close", None)
         if close:
             await asyncio.to_thread(close)
+
     tool_calls = [
         ChatCompletionMessageFunctionToolCall(
             id=call["id"],
@@ -890,7 +898,9 @@ async def think(
         return {
             "model": os.environ.get("CHAT_MODEL", "grok-4.3"),
             "reasoning_effort": os.environ.get("CHAT_REASONING_EFFORT", "none"),
-            "max_completion_tokens": int(os.environ.get("CHAT_MAX_TOKENS", "1200")),
+            "max_completion_tokens": int(
+                os.environ.get("CHAT_MAX_TOKENS", "1200")
+            ),
             "messages": [
                 {"role": "system", "content": answer_instructions(mode, context)},
                 *history,
@@ -929,19 +939,26 @@ async def think(
         log.info("stage grok  %5d ms", elapsed)
 
         if not msg.tool_calls:
-            reply = (msg.content or "").strip() or "답변을 생성하지 못했어요. 다시 질문해 주세요."
+            reply = (
+                (msg.content or "").strip()
+                or "답변을 생성하지 못했어요. 다시 질문해 주세요."
+            )
             if external_sources:
                 reply = _for_speech(reply)
             _append_history(history, {"role": "assistant", "content": reply})
             get_external_brain(student_id).schedule(history, source="text")
             return reply, tools_used, external_sources[:3], visualizations
 
-        tool_messages.append({
-            "role": "assistant",
-            "content": msg.content,
-            "tool_calls": [call.model_dump() for call in msg.tool_calls],
-        })
-        results = await asyncio.gather(*(execute(call) for call in msg.tool_calls))
+        tool_messages.append(
+            {
+                "role": "assistant",
+                "content": msg.content,
+                "tool_calls": [call.model_dump() for call in msg.tool_calls],
+            }
+        )
+        results = await asyncio.gather(
+            *(execute(call) for call in msg.tool_calls)
+        )
         for call, (name, result) in zip(msg.tool_calls, results):
             if name not in tools_used:
                 tools_used.append(name)
@@ -957,7 +974,9 @@ async def think(
                         visualizations.append(visual)
                 except json.JSONDecodeError:
                     pass
-            tool_messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+            tool_messages.append(
+                {"role": "tool", "tool_call_id": call.id, "content": result}
+            )
 
     raise RuntimeError("Grok exceeded the tool-call round limit")
 
@@ -1015,7 +1034,9 @@ async def list_weak_concepts(student_id: str = "default-student") -> list[dict]:
             "concept": memory.get("concept", ""),
             "difficulty_note": memory.get("difficulty_note", ""),
             "status": memory.get("status", "new"),
-            "mastery_percent": round(min(max(float(memory.get("confidence", 0)), 0), 1) * 100),
+            "mastery_percent": round(
+                min(max(float(memory.get("confidence", 0)), 0), 1) * 100
+            ),
             "success_count": int(memory.get("success_count", 0)),
             "failure_count": int(memory.get("failure_count", 0)),
             "last_seen_at": float(memory.get("last_seen_at", 0)),
