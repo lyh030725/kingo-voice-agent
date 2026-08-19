@@ -34,6 +34,14 @@ All user-visible visualization text MUST be Korean; formulas/standard terms may 
 Keep each turn short and conversational. Never read raw JSON aloud.
 """.strip()
 
+VOICE_SOCRATIC_VISUAL_RULE = """
+# Socratic visual priority
+A visual clue is not a spoken explanation. When the current reasoning step has a useful
+formula, process, or structure, MUST call show_visualization before the one Socratic
+question. The no-answer/worked-example rule applies to speech; keep the visual a clue
+and never use it to reveal the final answer.
+""".strip()
+
 SYSTEM_PROMPT = VOICE_SYSTEM_PROMPT
 
 VOICE_COURSE_TOOL = {
@@ -62,10 +70,11 @@ VOICE_VISUALIZATION_TOOL = {
     "name": "show_visualization",
     "description": (
         "Proactively show a visual whenever a formula, process, structure, or relevant "
-        "course PDF page can help the student reason. Prefer calling this tool over "
-        "describing such content only with speech. Use formula for an equation or "
-        "variable relationship, flow for a process or structure, and pdf for an exact "
-        "returned course page."
+        "course PDF page can help the student reason. In Socratic mode, treat the visual "
+        "as the preferred clue before the question, not as a spoken explanation. Prefer "
+        "calling this tool over describing such content only with speech. Use formula for "
+        "an equation or variable relationship, flow for a process or structure, and pdf "
+        "for an exact returned course page."
     ),
     "parameters": {
         "oneOf": [
@@ -203,9 +212,12 @@ def _enrich_web_result(result: dict) -> dict:
 def persona(mode: str, memory_context: dict | None = None) -> str:
     """Return concise realtime policy plus the student's latest weak concepts."""
     memory_json = json.dumps(memory_context or {"found": False}, ensure_ascii=False)
+    mode_prompt = MODE_PROMPTS.get(mode, MODE_PROMPTS["socratic"])
+    if mode == "socratic":
+        mode_prompt = f"{mode_prompt}\n\n{VOICE_SOCRATIC_VISUAL_RULE}"
     return (
         f"{VOICE_SYSTEM_PROMPT}\n\n"
-        f"{MODE_PROMPTS.get(mode, MODE_PROMPTS['socratic'])}\n\n"
+        f"{mode_prompt}\n\n"
         "# Recent weak concepts\n"
         f"{memory_json}"
     )
